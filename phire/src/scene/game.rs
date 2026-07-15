@@ -17,13 +17,14 @@ use crate::{
     fs::FileSystem,
     gyro::GYRO,
     info::{ChartFormat, ChartInfo},
-    judge::Judge,
+    judge::{apply_chord_grouping, boom_all_times, Judge},
     parse::{RPE_WIDTH, parse_extra, parse_pec, parse_phigros, parse_rpe},
     time::TimeManager,
     ui::{RectButton, Ui}
 };
 use anyhow::{bail, Context, Result};
 use concat_string::concat_string;
+use rustc_hash::FxHashMap;
 use macroquad::{prelude::*, window::InternalGlContext};
 use sasa::{Music, MusicParams};
 use serde::{Deserialize, Serialize};
@@ -384,7 +385,15 @@ impl GameScene {
                 .push(Effect::new(0.0..f64::INFINITY, include_str!("fxaa.glsl"), Vec::new(), false).unwrap());
         }
 
-        let judge = Judge::new(&chart);
+        let chord_groups = if config.chord_grouping {
+            apply_chord_grouping(&chart, config.chord_min_interval, config.chord_max_interval)
+        } else {
+            FxHashMap::default()
+        };
+        if config.boom {
+            boom_all_times(&mut chart);
+        }
+        let judge = Judge::new(&chart, chord_groups);
 
         let has_block_area = config.render_block_area && !chart.block_areas.is_empty();
 

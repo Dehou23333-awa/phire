@@ -122,6 +122,12 @@ pub struct Config {
 
     pub rotation_mode: bool,
 
+    pub chord_grouping: bool,
+    pub chord_min_interval: f64,
+    pub chord_max_interval: f64,
+
+    pub boom: bool,
+
     pub play_start_time: f64,
     pub play_end_time: Option<f64>,
     #[cfg(feature = "play")]
@@ -212,6 +218,12 @@ impl Default for Config {
             alpha_tint: false,
 
             rotation_mode: false,
+
+            chord_grouping: false,
+            chord_min_interval: 0.040,
+            chord_max_interval: 0.060,
+
+            boom: false,
 
             play_start_time: 0.,
             play_end_time: None,

@@ -277,6 +277,61 @@ mod inner;
 #[cfg(feature = "closed")]
 use inner::*;
 
+pub fn apply_chord_grouping(chart: &Chart, min_interval: f64, max_interval: f64) -> FxHashMap<(usize, u32), f64> {
+    let mut all_notes: Vec<(f64, usize, u32)> = Vec::new();
+    for (line_id, line) in chart.lines.iter().enumerate() {
+        for (note_id, note) in line.notes.iter().enumerate() {
+            if !note.fake && !matches!(note.kind, NoteKind::Drag | NoteKind::Flick) {
+                all_notes.push((note.time, line_id, note_id as u32));
+            }
+        }
+    }
+    all_notes.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut chord_map: FxHashMap<(usize, u32), f64> = FxHashMap::default();
+    let mut merged_count = 0;
+    let mut group_index = 0;
+    let mut i = 0;
+    while i < all_notes.len() {
+        if i + 1 < all_notes.len() && all_notes[i + 1].0 - all_notes[i].0 < min_interval {
+            let anchor = all_notes[i].0;
+            let mut j = i + 1;
+            while j < all_notes.len() && all_notes[j].0 - anchor <= 2.0 * max_interval {
+                j += 1;
+            }
+            j -= 1;
+            let midpoint = (all_notes[i].0 + all_notes[j].0) / 2.0;
+
+            for k in i..=j {
+                let (_, lid, nid) = all_notes[k];
+                chord_map.insert((lid, nid), midpoint);
+                merged_count += 1;
+            }
+            i = j + 1;
+            group_index += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    tracing::info!("[CHORD] chord grouping done: {} notes affected, {} groups formed", merged_count, group_index);
+    chord_map
+}
+
+pub fn boom_all_times(chart: &mut Chart) {
+    for line in &mut chart.lines {
+        for note in &mut line.notes {
+            if !note.fake {
+                let delta = 10.0 - note.time;
+                note.time = 10.0;
+                if let NoteKind::Hold { end_time, .. } = &mut note.kind {
+                    *end_time += delta;
+                }
+            }
+        }
+    }
+}
+
 #[repr(C)]
 pub struct Judge {
     // notes of each line in order
@@ -291,6 +346,7 @@ pub struct Judge {
 
     pub(crate) inner: JudgeInner,
     pub judgements: RefCell<Vec<(f64, u32, u32, Result<Judgement, bool>)>>,
+    chord_groups: FxHashMap<(usize, u32), f64>,
 }
 
 static SUBSCRIBER_ID: Lazy<usize> = Lazy::new(register_input_subscriber);
@@ -304,7 +360,7 @@ pub fn take_wheel() -> (f32, f32) {
 }
 
 impl Judge {
-    pub fn new(chart: &Chart) -> Self {
+    pub fn new(chart: &Chart, chord_groups: FxHashMap<(usize, u32), f64>) -> Self {
         let notes = chart
             .lines
             .iter()
@@ -325,6 +381,7 @@ impl Judge {
 
             inner: JudgeInner::new(chart.lines.iter().map(|it| it.notes.iter().filter(|it| !it.fake).count() as u32).sum()),
             judgements: RefCell::new(Vec::new()),
+            chord_groups,
         }
     }
 
@@ -973,58 +1030,70 @@ impl Judge {
             (Judgement::Perfect, Judgement::Perfect, 0., res.res_pack.info.fx_perfect())
         };
         //let spd = res.config.speed;
-        let mut judgements = Vec::new();
-        for (line_id, (line, (idx, st))) in chart.lines.iter_mut().zip(self.notes.iter_mut()).enumerate() {
-            for id in &idx[*st..] {
-                let note = &mut line.notes[*id as usize];
-                if let JudgeStatus::Hold(..) = note.judge {
-                    if let NoteKind::Hold { end_time, .. } = note.kind {
-                        if t >= end_time {
-                            note.judge = JudgeStatus::Judged;
-                            judgements.push((line_id, *id));
-                            #[cfg(feature = "play")]
-                            if res.config.health_mode.is_some() {
-                                res.health.on_judge(Judgement::Perfect);
+        let mut judgements: Vec<(usize, u32, f64, bool)> = Vec::new();
+
+        {
+            // --- original per-note autoplay path ---
+            for (line_id, (line, (idx, st))) in chart.lines.iter_mut().zip(self.notes.iter_mut()).enumerate() {
+                for id in &idx[*st..] {
+                    let note = &mut line.notes[*id as usize];
+                    let judge_time = self.chord_groups.get(&(line_id, *id)).copied().unwrap_or(note.time);
+
+
+                    if let JudgeStatus::Hold(..) = note.judge {
+                        if let NoteKind::Hold { end_time, .. } = note.kind {
+                            let end_judge_time = if self.chord_groups.contains_key(&(line_id, *id)) {
+                                let delta = judge_time - note.time;
+                                end_time + delta
+                            } else {
+                                end_time
+                            };
+                            if t >= end_judge_time {
+                                note.judge = JudgeStatus::Judged;
+                                judgements.push((line_id, *id, judge_time, true));
+                                #[cfg(feature = "play")]
+                                if res.config.health_mode.is_some() {
+                                    res.health.on_judge(Judgement::Perfect);
+                                }
+                                continue;
                             }
-                            continue;
                         }
                     }
-                }
-                if !matches!(note.judge, JudgeStatus::NotJudged) {
-                    continue;
-                }
-                if note.time > t {
-                    break;
-                }
-                note.judge = if matches!(note.kind, NoteKind::Hold { .. }) {
-                    if note.time >= res.config.play_start_time && !res.disable_hit_fx {
-                        note.hitsound.play(res);
+                    if !matches!(note.judge, JudgeStatus::NotJudged) {
+                        continue;
                     }
-                    self.judgements.borrow_mut().push((t, line_id as _, *id, Err(true)));
-                    // AutoPlay 无需输出打击时间差
-                    // JudgeStatus::Hold(true, t, (t - note.time) / spd, false, f32::INFINITY)
-                    JudgeStatus::Hold(true, t, judge_time, true, f64::INFINITY)
-                } else {
-                    judgements.push((line_id, *id));
-                    #[cfg(feature = "play")]
-                    if res.config.health_mode.is_some() {
-                        res.health.on_judge(Judgement::Perfect);
+                    if note.time > t && judge_time > t {
+                        break;
                     }
-                    JudgeStatus::Judged
-                };
-            }
-            while idx
-                .get(*st)
-                .is_some_and(|id| matches!(line.notes[*id as usize].judge, JudgeStatus::Judged))
-            {
-                *st += 1;
+                    if judge_time > t {
+                        continue;
+                    }
+                    note.judge = if matches!(note.kind, NoteKind::Hold { .. }) {
+                        if judge_time >= res.config.play_start_time && !res.disable_hit_fx {
+                            note.hitsound.play(res);
+                        }
+                        self.judgements.borrow_mut().push((t, line_id as _, *id, Err(true)));
+                        JudgeStatus::Hold(true, t, judge_time, true, f64::INFINITY)
+                    } else {
+                        judgements.push((line_id, *id, judge_time, true));
+                        #[cfg(feature = "play")]
+                        if res.config.health_mode.is_some() {
+                            res.health.on_judge(Judgement::Perfect);
+                        }
+                        JudgeStatus::Judged
+                    };
+                }
+                while idx.get(*st).is_some_and(|id| matches!(line.notes[*id as usize].judge, JudgeStatus::Judged)) {
+                    *st += 1;
+                }
             }
         }
-        for (line_id, id) in judgements.into_iter() {
+
+        // Shared judgement FX/sound processing
+        for (line_id, id, nt, play_sound) in judgements.into_iter() {
             let mut note_transform = {
                 let line = &mut chart.lines[line_id];
                 let note = &mut line.notes[id as usize];
-                let nt = if matches!(note.kind, NoteKind::Hold { .. }) { t } else { note.time };
                 line.object.set_time(nt);
                 note.object.set_time(nt);
                 note.object.now(res)
@@ -1042,11 +1111,11 @@ impl Judge {
                         fx_color
                     };
                     self.commit(t, judge_type, line_id as _, id, 0.);
-                    if note.time >= res.config.play_start_time && !res.disable_hit_fx {
+                    if nt >= res.config.play_start_time && !res.disable_hit_fx {
                         res.with_model(line.now_transform(res, &chart.lines) * note_transform, |res| {
                             res.emit_at_origin(note.rotation(line), color)
                         });
-                        if !res.config.all_bad {
+                        if play_sound && !res.config.all_bad {
                             note.hitsound.play(res)
                         }
                     }
@@ -1061,11 +1130,13 @@ impl Judge {
                         res.res_pack.info.fx_perfect()
                     };
                     self.commit(t, Judgement::Perfect, line_id as _, id, 0.);
-                    if note.time >= res.config.play_start_time && !res.disable_hit_fx {
+                    if nt >= res.config.play_start_time && !res.disable_hit_fx {
                         res.with_model(line.now_transform(res, &chart.lines) * note_transform, |res| {
                             res.emit_at_origin(note.rotation(line), color)
                         });
-                        note.hitsound.play(res)
+                        if play_sound {
+                            note.hitsound.play(res)
+                        }
                     }
                 },
             };
