@@ -1,6 +1,6 @@
 crate::tl_file!("parser");
 
-use super::{BpmList, Effect, JudgeLine, JudgeLineKind, Matrix, Resource, UIElement, Vector};
+use super::{BlockArea, BlockAreaRenderer, BlockAreaStyle, BpmList, Effect, JudgeLine, JudgeLineKind, Matrix, Resource, UIElement, Vector};
 use crate::{core::Object, fs::FileSystem, judge::JudgeStatus, ui::{TextPainter, Ui}};
 use anyhow::{Context, Result};
 use macroquad::prelude::*;
@@ -35,6 +35,9 @@ pub struct Chart {
     pub hitsounds: HitSoundMap,
     pub fonts: Vec<RefCell<TextPainter>>,
 
+    pub block_areas: Vec<BlockArea>,
+    block_area_renderer: RefCell<BlockAreaRenderer>,
+
     order: Vec<usize>,
     attach_ui: [Option<usize>; 7],
     trs: Vec<Matrix>,
@@ -67,7 +70,30 @@ impl Chart {
             hitsounds,
             fonts,
             trs,
+
+            block_areas: Vec::new(),
+            block_area_renderer: RefCell::new(BlockAreaRenderer::default()),
         }
+    }
+
+    /// 画剧情遮挡块（blockAreaList）。
+    ///
+    /// 不在 `render` 里画 —— 官方把这一层压在**整帧之上**（判定线、音符、UI 全被盖住），
+    /// 所以要在 `GameScene` 画完 `ui()` 之后调，`onto` 传那时正在写的图。
+    /// 详见 [`BlockAreaRenderer::render`]。
+    pub fn render_block_area(&self, res: &mut Resource, onto: Option<RenderTarget>) {
+        if !res.config.render_block_area || self.block_areas.is_empty() {
+            return;
+        }
+        let time = res.time;
+        let blocks = &self.block_areas;
+        self.block_area_renderer.borrow_mut().render(res, blocks, time, onto);
+    }
+
+    /// 修改剧情遮挡块的外观（颜色 / 故障效果 / 材质参数）。
+    pub fn with_block_area_style(self, f: impl FnOnce(&mut BlockAreaStyle)) -> Self {
+        f(&mut self.block_area_renderer.borrow_mut().style);
+        self
     }
 
     #[inline]
@@ -174,6 +200,7 @@ impl Chart {
             if res.config.aggressive_note {
                 res.note_pos_map.clear();
             }
+
             if res.config.sample_count > 1 {
                 unsafe { get_internal_gl() }.flush();
                 if let Some(target) = &res.chart_target {

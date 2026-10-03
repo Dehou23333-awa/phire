@@ -111,6 +111,7 @@ pub struct Config {
     pub render_bg_dim: bool,
     pub preserve_framebuffer: bool,
     pub render_extra: bool,
+    pub render_block_area: bool,
     pub bg_blurriness: f32,
 
     pub max_particles: usize,
@@ -200,6 +201,7 @@ impl Default for Config {
             render_bg_dim: true,
             preserve_framebuffer: false,
             render_extra: true,
+            render_block_area: true,
             bg_blurriness: 80.,
 
             max_particles: 5000,

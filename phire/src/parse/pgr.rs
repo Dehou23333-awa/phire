@@ -69,6 +69,10 @@ struct PgrChart {
     format_version: u32,
     offset: f64,
     judge_line_list: Vec<PgrJudgeLine>,
+    /// Phigros 4.0 剧情遮挡区域。`blockAreaList` 的 `time` 单位是**秒**，
+    /// 不做 T(拍) 换算，所以这里原样保留 JSON，交给 `block_area` 模块解析。
+    #[serde(default)]
+    block_area_list: Option<serde_json::Value>,
 }
 
 macro_rules! validate_events {
@@ -312,7 +316,7 @@ pub fn parse_phigros(source: &str, extra: ChartExtra) -> Result<Chart> {
         .collect::<Result<Vec<_>>>()?;
 
     process_lines(&mut lines);
-    Ok(Chart::new(
+    let mut chart = Chart::new(
         pgr.offset,
         lines,
         BpmList::from_time(bpm_values),
@@ -323,5 +327,10 @@ pub fn parse_phigros(source: &str, extra: ChartExtra) -> Result<Chart> {
         extra,
         FxHashMap::default(),
         Vec::new(),
-    ))
+    );
+    let block_areas = crate::core::parse_block_areas(pgr.block_area_list.as_ref());
+    if !block_areas.is_empty() {
+        chart.block_areas = block_areas;
+    }
+    Ok(chart)
 }

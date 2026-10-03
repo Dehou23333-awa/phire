@@ -12,6 +12,11 @@ pub type Matrix = nalgebra::Matrix3<f32>;
 mod anim;
 pub use anim::{Anim, AnimFloat, AnimFloatF64, AnimVector, Keyframe};
 
+mod block_area;
+pub use block_area::{
+    ease as block_area_ease, parse_block_areas, union_contours, visible_extent, BlockArea, BlockAreaRenderer, BlockAreaStyle, BlockPhase, BlockRect, EASE_LINEAR, EASE_ONE, EASE_ZERO,
+};
+
 mod chart;
 pub use chart::{Chart, ChartExtra, ChartSettings, HitSoundMap};
 
