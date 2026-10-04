@@ -43,13 +43,16 @@ jobs:
           set -euo pipefail
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          # sdkmanager is not on PATH and lives under a versioned dir; do not
-          # chmod it, the system copy is not writable by the runner user.
-          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
-          test -x "$SDKMANAGER"
-          "$SDKMANAGER" --install "ndk;26.1.10909125"
-          echo "ANDROID_NDK_HOME=$SDK/ndk/26.1.10909125" >> "$GITHUB_ENV"
-          ls "$SDK/ndk"
+          # The runner already ships an NDK and exports ANDROID_NDK_ROOT.
+          # Only install one when it is missing, and keep the two variables in
+          # agreement (cargo-ndk warns and prefers ANDROID_NDK_ROOT otherwise).
+          if [ -n "${ANDROID_NDK_ROOT:-}" ] && [ -d "${ANDROID_NDK_ROOT}" ]; then
+            echo "using preinstalled NDK: ${ANDROID_NDK_ROOT}"
+            echo "ANDROID_NDK_HOME=${ANDROID_NDK_ROOT}" >> "$GITHUB_ENV"
+          else
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.1.10909125"
+            echo "ANDROID_NDK_HOME=$SDK/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -93,9 +96,8 @@ jobs:
             -t aarch64-linux-android \
             -t armv7-linux-androideabi \
             -o ./android/app/src/main/jniLibs \
-            -p phire-ui \
-            build --release
-          find ./android/app/src/main/jniLibs -name '*.so'
+            build --release -p phire-ui
+          find ./android/app/src/main/jniLibs -name '*.so' -exec ls -la {} \;
 
       - name: Assemble APK
         working-directory: android
