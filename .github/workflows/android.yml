@@ -35,14 +35,15 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
+      # The ubuntu runner image ships the Android SDK and cmdline-tools already;
+      # the setup-android action trips over a `sdkmanager tools` quirk, so use
+      # the preinstalled sdkmanager directly.
+      - name: Set up Android NDK
         run: |
+          echo "ANDROID_HOME=${ANDROID_HOME:-${ANDROID_SDK_ROOT}}" >> "$GITHUB_ENV"
           sdkmanager --install "ndk;26.1.10909125"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
-          ls "$ANDROID_HOME/ndk"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          ls "${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/ndk"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
