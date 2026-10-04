@@ -12,7 +12,7 @@ use super::{
 use crate::{
     bin::BinaryReader,
     config::{Config, Mods},
-    core::{BUFFER_SIZE, BadNote, Chart, ChartExtra, Effect, Point, Resource, UIElement},
+    core::{prepare_block_effects, reset_block_effects, BUFFER_SIZE, BadNote, Chart, ChartExtra, Effect, Point, Resource, UIElement},
     ext::{RectExt, SafeTexture, draw_text_aligned, draw_text_aligned_opt_width, ease_in_out_quartic, get_latency, parse_time, push_frame_time, screen_aspect, semi_white, validate_combo},
     fs::FileSystem,
     gyro::GYRO,
@@ -156,6 +156,8 @@ macro_rules! reset {
         $self.bad_notes.clear();
         $self.judge.reset();
         $self.chart.reset();
+        // 噪域的 hover / 帧内时钟不能跨重试保留。
+        reset_block_effects();
         $res.reset();
         $self.music.pause()?;
         $self.music.seek_to(0.)?;
@@ -374,6 +376,10 @@ impl GameScene {
             Self::load_chart(fs.deref_mut(), &info, &config).await?
         };
         let effects = std::mem::take(&mut chart.extra.global_effects);
+        // 谱面带噪域时，提前链接 shader / 解码贴图，免得第一片噪域出现时卡一帧。
+        if !chart.block_areas.is_empty() {
+            prepare_block_effects();
+        }
         if config.fxaa {
             chart
                 .extra
@@ -1584,6 +1590,10 @@ impl Scene for GameScene {
             });
             self.overlay_ui(ui, tm)?;
         }
+
+        // Active 遮挡层：官方挂在 `CameraEvent.AfterForwardAlpha`，也就是音符、特效、
+        // 游戏 HUD 全部画完之后，采样的才是完整底图。
+        self.chart.render_block_overlay(&mut self.res);
 
         if !self.res.no_effect || msaa || self.res.config.low_resolution_mode {
             // render the texture onto screen

@@ -88,8 +88,64 @@ pub struct BlockTransform {
     pub center: Vector,
     /// 未取绝对值的尺寸（`set_localScale` 才 `fabs`）。
     pub size: Vector,
-    /// 弧度，逆时针为正（`eulerAngles.z` 是角度，这里统一成弧度）。
+    /// 角度制，逆时针为正（`eulerAngles.z`）。
+    ///
+    /// 注意这里是**度**，与 [`Zone::angle`]（弧度）不同 —— 与官方一致：
+    /// 事件里存的是度，写进 `Transform` 也是度，只有建旋转矩阵时才转弧度。
     pub rotation: f32,
+}
+
+/// 一片已经解算好的可见区域（相机要栅格化的矩形）。
+///
+/// 相当于官方一个 `PreviewBlockControl` 在某一帧的 `Transform` 快照，
+/// 额外打包了「要不要画 / 怎么合成」需要的那几个标志。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Zone {
+    /// chart 空间中心。
+    pub center: Vector,
+    /// chart 空间半宽 / 半高（已取绝对值）。
+    pub half: Vector,
+    /// 弧度，逆时针为正。
+    pub angle: f32,
+    /// subtract 块。
+    pub invert: bool,
+    /// 处于 Active 段（否则算 Disabled / Ready）。
+    pub active: bool,
+    /// 落在 `[enableTime - READY_DURATION, enableTime)` 内。
+    pub ready: bool,
+    /// 淡入系数（`DisabledBlockShow` 的 0.5s 线性淡入）。
+    pub opacity: f32,
+}
+
+impl Zone {
+    /// 把区域解算成一片可见区域；`Hidden` 段或尺寸归零时返回 `None`。
+    pub fn from_area(area: &BlockArea, time: f64, aspect: f32) -> Option<Self> {
+        let phase = area.phase(time);
+        if phase == BlockPhase::Hidden {
+            return None;
+        }
+        let tr = area.transform(time, aspect);
+        let half = Vector::new(tr.size.x.abs() * 0.5, tr.size.y.abs() * 0.5);
+        if half.x == 0. || half.y == 0. {
+            return None;
+        }
+        let active = phase == BlockPhase::Active;
+        // 若 `enableTime <= appearTime`，官方不播淡入。
+        let fades_in = !area.is_active(area.appear_time);
+        Some(Self {
+            center: tr.center,
+            half,
+            angle: tr.rotation.to_radians(),
+            invert: area.is_subtract,
+            active,
+            ready: !active && area.is_ready_window(time),
+            opacity: if !active && fades_in {
+                ((time - area.appear_time) / BlockArea::READY_DURATION).clamp(0., 1.) as f32
+            } else {
+                1.
+            },
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +500,8 @@ impl BlockArea {
 }
 
 fn matrix_of(tr: &BlockTransform) -> Matrix {
-    Matrix::new_translation(&tr.center) * Rotation2::new(tr.rotation).to_homogeneous() * Matrix::identity().append_nonuniform_scaling(&tr.size)
+    // `rotation` 是度；事件里存的也是度，只有建矩阵时才转弧度。
+    Matrix::new_translation(&tr.center) * Rotation2::new(tr.rotation.to_radians()).to_homogeneous() * Matrix::identity().append_nonuniform_scaling(&tr.size)
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +816,41 @@ mod tests {
         assert!(close(tr.rotation, 90.), "{tr:?}");
         // anchor 在 (1, 0)，中心在 (0, 0)，逆时针 90° 后到 (1, -1)。
         assert!(close(tr.center.x, 1.) && close(tr.center.y, -1.), "{tr:?}");
+    }
+
+    /// 回归：`BlockTransform.rotation` 是**度**，建矩阵时必须转弧度。
+    /// （早期版本直接 `Rotation2::new(tr.rotation)`，旋转过的块 `contains` 全错。）
+    #[test]
+    fn contains_handles_rotation_units() {
+        let rotate = |rotation| {
+            vec![
+                BlockRotateEvent {
+                    anchor: Vector::new(0.5, 0.5),
+                    time: 0.,
+                    ease: 0,
+                    rotation: 0.,
+                },
+                BlockRotateEvent {
+                    anchor: Vector::new(0.5, 0.5),
+                    time: 10.,
+                    ease: 0,
+                    rotation,
+                },
+            ]
+        };
+        // 宽 0.5 屏、高 0.06 屏的长条，绕屏幕中心旋转。
+        let aspect = 2.0;
+        let b = area((0.75, 0.53), (0.25, 0.47), vec![], vec![], rotate(90.));
+        let tr = b.transform(10., aspect);
+        assert!(close(tr.rotation, 90.), "{tr:?}");
+        // 转 90° 后长条变竖直。
+        assert!(b.contains(Vector::new(0., 0.), 10., aspect, 0.));
+        assert!(!b.contains(Vector::new(0.3, 0.), 10., aspect, 0.), "水平方向应当出局");
+        assert!(b.contains(Vector::new(0., 0.2), 10., aspect, 0.), "竖直方向应当在里面");
+        // 未旋转时正好相反。
+        let b = area((0.75, 0.53), (0.25, 0.47), vec![], vec![], rotate(0.));
+        assert!(b.contains(Vector::new(0.3, 0.), 10., aspect, 0.));
+        assert!(!b.contains(Vector::new(0., 0.2), 10., aspect, 0.));
     }
 
     /// 奇偶规则：单个 subtract 块一样遮挡；普通 + subtract 互相抵消。

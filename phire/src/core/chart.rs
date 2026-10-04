@@ -1,6 +1,6 @@
 crate::tl_file!("parser");
 
-use super::{BlockArea, BpmList, Effect, JudgeLine, JudgeLineKind, Matrix, Resource, UIElement, Vector};
+use super::{draw_disabled_zones, draw_zones_with_touches, visible_zones, BlockArea, BpmList, Effect, JudgeLine, JudgeLineKind, Matrix, Resource, UIElement, Vector};
 use crate::{core::Object, fs::FileSystem, judge::JudgeStatus, ui::{TextPainter, Ui}};
 use anyhow::{Context, Result};
 use macroquad::prelude::*;
@@ -149,6 +149,14 @@ impl Chart {
 
     pub fn render(&self, ui: &mut Ui, res: &mut Resource) {
         res.apply_model_of(&Matrix::identity().append_nonuniform_scaling(&Vector::new(if res.config.flip_x() { -1. } else { 1. }, -1.)), |res| {
+            // 遮挡区域分两层，这一层是 **Disabled / Ready**，官方在 Background
+            // sorting layer order 2，也就是判定线（order 3）**之前**。
+            // Active 层在 HUD 之后，见 `render_block_overlay`。
+            if res.config.render_block_area {
+                let zones = visible_zones(&self.block_areas, res.time, res.aspect_ratio);
+                draw_disabled_zones(res, res.aspect_ratio, &zones);
+            }
+
             #[cfg(feature = "video")]
             for (video, attach) in &self.extra.videos {
                 if let Some(attach) = attach {
@@ -189,5 +197,21 @@ impl Chart {
                 }
             }
         });
+    }
+
+    /// 画 **Active** 遮挡层。
+    ///
+    /// 官方把它挂在 `CameraEvent.AfterForwardAlpha`，也就是音符、特效、游戏 HUD
+    /// **全部画完之后**，并且采样的是完整底图。所以必须由 `GameScene` 在 `ui()` /
+    /// `overlay_ui()` 之后调用，不能在 `render()` 里做。
+    pub fn render_block_overlay(&self, res: &mut Resource) {
+        if !res.config.render_block_area || self.block_areas.is_empty() {
+            return;
+        }
+        let zones = visible_zones(&self.block_areas, res.time, res.aspect_ratio);
+        if zones.is_empty() {
+            return;
+        }
+        draw_zones_with_touches(res, res.aspect_ratio, &zones, &self.blocked_touches, res.config.flip_x());
     }
 }

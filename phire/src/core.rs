@@ -15,8 +15,12 @@ pub use anim::{Anim, AnimFloat, AnimFloatF64, AnimVector, Keyframe};
 mod block;
 pub use block::{
     block_touch_blocked, eased_progress as block_eased_progress, pct_to_chart as block_pct_to_chart, touch_inset_world, BlockArea, BlockMoveEvent, BlockPhase, BlockRotateEvent, BlockScaleEvent,
-    BlockTransform, EASE_COUNT, EASE_HOLD, EASE_JUMP, EASE_LINEAR, EASE_SAMPLES,
+    BlockTransform, Zone, EASE_COUNT, EASE_HOLD, EASE_JUMP, EASE_LINEAR, EASE_SAMPLES,
 };
+
+mod block_shader;
+pub use block_shader::{draw_disabled_zones, draw_zones_with_touches, visible_zones};
+pub(crate) use block_shader::{prepare_block_effects, reset_block_effects};
 
 mod chart;
 pub use chart::{Chart, ChartExtra, ChartSettings, HitSoundMap};

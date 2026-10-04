@@ -111,6 +111,10 @@ pub struct Config {
     pub render_bg_dim: bool,
     pub preserve_framebuffer: bool,
     pub render_extra: bool,
+    /// Phigros 4.0 剧情遮挡区域（`blockAreaList`）。
+    ///
+    /// 关掉后完全不进遮罩/材质管线，行为与没有该功能的版本一致。
+    pub render_block_area: bool,
     pub bg_blurriness: f32,
 
     pub max_particles: usize,
@@ -200,6 +204,7 @@ impl Default for Config {
             render_bg_dim: true,
             preserve_framebuffer: false,
             render_extra: true,
+            render_block_area: true,
             bg_blurriness: 80.,
 
             max_particles: 5000,
