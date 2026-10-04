@@ -93,8 +93,8 @@ jobs:
             -t aarch64-linux-android \
             -t armv7-linux-androideabi \
             -o ./android/app/src/main/jniLibs \
-            release \
-            -p phire-ui
+            -p phire-ui \
+            build --release
           find ./android/app/src/main/jniLibs -name '*.so'
 
       - name: Assemble APK
