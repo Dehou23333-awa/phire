@@ -1,0 +1,111 @@
+name: android-apk
+
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: build universal apk
+    runs-on: ubuntu-latest
+    env:
+      # Tag of TeamFlos/prpr-avc-ffmpeg that provides the prebuilt ffmpeg
+      # static libs for each target. phire's default `video` feature links
+      # prpr-avc, which needs them.
+      AVC_TAG: 20260730_v0
+    steps:
+      - uses: actions/checkout@v4
+
+      # phire-ui/build.rs runs dotenv_build on the workspace-root .env. A
+      # default (non-`closed`) build needs no variables, but the file has to
+      # exist, so create an empty one.
+      - name: Provide empty .env
+        run: touch .env
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          ls "$ANDROID_HOME/ndk"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: 'true'
+          cache-all-crates: 'true'
+
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@cargo-ndk
+
+      # prpr-avc/build.rs looks for ffmpeg under <crate>/static-lib/<TARGET>/,
+      # which is gitignored because the binaries are large. The official
+      # prpr-avc-ffmpeg release ships one flat tarball per target.
+      - name: Fetch ffmpeg static libs
+        run: |
+          set -euo pipefail
+          for target in aarch64-linux-android armv7-linux-androideabi; do
+            dest="prpr-avc/static-lib/$target"
+            mkdir -p "$dest"
+            curl -fsSL --retry 3 \
+              "https://github.com/TeamFlos/prpr-avc-ffmpeg/releases/download/${AVC_TAG}/${target}.tar.gz" \
+              -o "/tmp/${target}.tar.gz"
+            tar -xzf "/tmp/${target}.tar.gz" -C "$dest"
+            echo "== $dest"; ls -la "$dest"
+          done
+
+      - name: Build libphire_ui.so
+        run: |
+          set -euo pipefail
+          cargo ndk \
+            -t aarch64-linux-android \
+            -t armv7-linux-androideabi \
+            -o ./android/app/src/main/jniLibs \
+            release \
+            -p phire-ui
+          find ./android/app/src/main/jniLibs -name '*.so'
+
+      - name: Assemble APK
+        working-directory: android
+        run: gradle --no-daemon assembleRelease
+
+      - name: Collect APK
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp "$(find android/app/build/outputs/apk -name '*.apk' | head -1)" \
+            dist/phira-android-universal.apk
+          ls -la dist
+          # .so payload + apk size, handy when comparing against the official build
+          unzip -l dist/phira-android-universal.apk | grep -E '\.so$' || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phira-android-apk
+          path: dist/*.apk
+          if-no-files-found: error

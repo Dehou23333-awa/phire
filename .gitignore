@@ -48,3 +48,11 @@ inner.rs
 /log*
 /.vscode
 
+
+# Android build outputs (the .so is produced by `cargo ndk`, the rest by Gradle)
+/android/app/src/main/jniLibs/
+/android/app/build/
+/android/build/
+/android/.gradle/
+/android/local.properties
+/android/dist/

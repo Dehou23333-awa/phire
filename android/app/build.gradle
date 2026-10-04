@@ -1,0 +1,40 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.phira.player'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.phira.player'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '0.4.0'
+    }
+
+    buildTypes {
+        release {
+            // Signed with the standard debug key so CI can produce an installable
+            // artifact without extra secrets. Replace before publishing anything.
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging false
+        }
+    }
+}
+
+// The .so files are produced by `cargo ndk` and dropped into src/main/jniLibs
+// before Gradle runs; nothing is resolved from a repository here.
+dependencies {}
