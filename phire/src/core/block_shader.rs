@@ -18,11 +18,9 @@
 //! 材质常量直接来自官方 `.mat`，可用 `docs/block-area/audit_material_constants.py`
 //! 对 APK 重新核对（任何漂移都会立刻报出来）。
 
-use super::{BlockPhase, Matrix, Resource, Vector, Zone};
+use super::{Matrix, Resource, Vector, Zone};
 use macroquad::material::{gl_use_default_material, gl_use_material, load_material, Material, MaterialParams};
-use macroquad::miniquad::{
-    BlendFactor, BlendState, BlendValue, Equation, PipelineParams, RenderingBackend, ShaderError, TextureWrap, UniformDesc, UniformType,
-};
+use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation, PipelineParams, RenderingBackend, TextureWrap, UniformDesc, UniformType};
 use macroquad::prelude::*;
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
@@ -210,10 +208,16 @@ fn load_block_material(disabled: bool, hover: bool) -> Result<Material, macroqua
         }
         material.set_uniform("_SparkTint", vec3(1., 0.28490567, 0.28490567));
         material.set_uniform("uDisabledSparkTint", vec3(0.31132078, 0.077830195, 0.077830195));
-        material.set_uniform("_TouchPosCount", 0_i32);
-        material.set_uniform("uLayer", if disabled { 0_i32 } else { 3_i32 });
-        for i in 0..MAX_TOUCHES {
-            material.set_uniform(&format!("_TouchPos[{i}]"), vec2(0., 0.));
+        // `uLayer` 与 `_TouchPosCount` 已经在特化时被替换成常量，设了只会拿到
+        // “non-existing uniform” 警告；`_TouchPos` 数组在没有 hover 分支时也会被
+        // 编译器整段删掉，所以只在真正用得到的那份材质上设。
+        if !disabled {
+            material.set_uniform("_TouchPosCount", 0_i32);
+        }
+        if hover {
+            // 数组要**整段**上传：miniquad 把 `_TouchPos` 当作一个 array uniform
+            // （`glUniform2fv(loc, array_count, data)`），单独设 `_TouchPos[i]` 会找不到。
+            material.set_uniform_array("_TouchPos", &[vec2(0., 0.); MAX_TOUCHES]);
         }
         material
     })
@@ -238,7 +242,7 @@ static MATERIAL: Lazy<Option<[Material; 3]>> = Lazy::new(|| {
 });
 
 /// 在加载谱面时链接 shader、解码贴图，避免第一片噪域出现时卡顿一帧。
-pub(crate) fn prepare_block_effects() {
+pub fn prepare_block_effects() {
     Lazy::force(&MATERIAL);
     Lazy::force(&DISPLACE_TEX);
     Lazy::force(&SPARK_TEX);
@@ -258,7 +262,6 @@ pub(crate) fn prepare_block_effects() {
             material.set_uniform("uUnityTime", vec4(0., 0., 0., 0.));
             material.set_uniform("_ScreenParams", vec4(1., 1., 2., 2.));
             material.set_uniform("_EffectRT_TexelSize", vec4(1., 1., 1., 1.));
-            material.set_uniform("_TouchPosCount", 0_i32);
             gl_use_material(material);
             draw_rectangle(0., 0., 0.001, 0.001, WHITE);
         }
@@ -268,12 +271,20 @@ pub(crate) fn prepare_block_effects() {
 }
 
 /// 重试 / 换谱时清掉 hover 与帧内时钟。
-pub(crate) fn reset_block_effects() {
+pub fn reset_block_effects() {
     FRAME.with(|frame| {
         let mut frame = frame.borrow_mut();
         frame.touch.reset();
         frame.clock = None;
     });
+}
+
+/// 材质是否链接成功。
+///
+/// 需要先调用 [`prepare_block_effects`]（或跑过一帧）。
+/// 主要给 `examples/block_shader_smoke.rs` 之类的诊断用。
+pub fn block_material_ready() -> bool {
+    MATERIAL.as_ref().is_some()
 }
 
 /// 可见区域列表（`Hidden` 段与零尺寸的会被剔掉）。
@@ -424,9 +435,16 @@ fn draw_layer(res: &mut Resource, aspect: f32, zones: &[Zone], time: f32, disabl
         m.set_uniform("uView", vec3(width as f32, height as f32, aspect));
         m.set_uniform("_ScreenParams", vec4(width as f32, height as f32, 1. + 1. / width as f32, 1. + 1. / height as f32));
         m.set_uniform("_EffectRT_TexelSize", vec4(1. / effect_dim.0 as f32, 1. / effect_dim.1 as f32, effect_dim.0 as f32, effect_dim.1 as f32));
-        m.set_uniform("_TouchPosCount", touches.len().min(MAX_TOUCHES) as i32);
-        for (i, (_, uv)) in touches.iter().take(MAX_TOUCHES).enumerate() {
-            m.set_uniform(&format!("_TouchPos[{i}]"), *uv * vec2(width as f32 / height as f32, 1.));
+        if !disabled {
+            m.set_uniform("_TouchPosCount", touches.len().min(MAX_TOUCHES) as i32);
+        }
+        if hover {
+            // 见 `load_block_material`：这是 array uniform，必须一次传满。
+            let mut positions = [vec2(0., 0.); MAX_TOUCHES];
+            for (slot, (_, uv)) in positions.iter_mut().zip(touches.iter()) {
+                *slot = *uv * vec2(width as f32 / height as f32, 1.);
+            }
+            m.set_uniform_array("_TouchPos", &positions);
         }
         m.set_uniform("_TouchPosShine", (0.63 + 0.37 * ((time * 43.).sin() * 0.5 + 0.5)) * 2.);
 
