@@ -1,11 +1,14 @@
 package com.phira.player;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
@@ -21,7 +24,12 @@ import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.widget.EditText;
 import android.widget.LinearLayout;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 
 import quad_native.QuadNative;
 
@@ -37,6 +45,9 @@ import quad_native.QuadNative;
  * Structure follows miniquad's own `java/MainActivity.java` template.
  */
 public final class MainActivity extends Activity {
+
+    private static final String TAG = "PhiraAndroid";
+    private static final int REQUEST_FILE = 1001;
 
     private QuadSurface view;
 
@@ -90,6 +101,97 @@ public final class MainActivity extends Activity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         QuadNative.libActivityOnWindowFocusChanged(hasFocus);
+    }
+
+    // ---------------------------------------------------------------------
+    // Called from the native side through JNI. phire looks these up on the
+    // Activity with GetMethodID and invokes the result without a null check, so
+    // a missing method is an immediate SIGSEGV rather than a no-op. Keep the
+    // names and signatures exactly as phire/src/scene.rs spells them.
+    // ---------------------------------------------------------------------
+
+    /**
+     * The native side wants a file (chart / respack import). The system picker
+     * hands back a content:// URI, but Rust opens the result with plain
+     * filesystem calls, so copy it into the cache dir and pass the real path.
+     */
+    public void chooseFile() {
+        runOnUiThread(() -> {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                startActivityForResult(intent, REQUEST_FILE);
+            } catch (Exception e) {
+                Log.w(TAG, "no document picker available", e);
+                QuadNative.setChosenFile("");
+            }
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_FILE) {
+            return;
+        }
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        String path = copyToCache(data.getData());
+        QuadNative.setChosenFile(path == null ? "" : path);
+    }
+
+    private String copyToCache(Uri uri) {
+        String name = uri.getLastPathSegment();
+        name = (name == null ? "import" : name).replace('/', '_');
+        File out = new File(getCacheDir(), name);
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             FileOutputStream os = new FileOutputStream(out)) {
+            if (in == null) {
+                return null;
+            }
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                os.write(buf, 0, n);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "copy of " + uri + " failed", e);
+            return null;
+        }
+        return out.getAbsolutePath();
+    }
+
+    /** getMethodID is called with (String, boolean, String, String)V. */
+    public void inputText(String text, boolean isPassword, String title, String hint) {
+        runOnUiThread(() -> {
+            EditText input = new EditText(this);
+            input.setSingleLine(true);
+            if (isPassword) {
+                input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            }
+            input.setText(text == null ? "" : text);
+            if (hint != null) {
+                input.setHint(hint);
+            }
+            new AlertDialog.Builder(this)
+                .setTitle(title == null ? "" : title)
+                .setView(input)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    CharSequence v = input.getText();
+                    QuadNative.setInputText(v == null ? "" : v.toString());
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .setOnCancelListener(dialog -> QuadNative.setInputText(""))
+                .show();
+        });
+    }
+
+    /** Anti-addiction callback; signature fixed by phire-ui: (String, String)V. */
+    public void antiAddiction(String action, String arg) {
+        Log.i(TAG, "antiAddiction " + action + " " + arg);
     }
 
     @Override
