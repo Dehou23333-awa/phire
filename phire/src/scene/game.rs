@@ -43,6 +43,9 @@ use inner::*;
 
 pub const WAIT_TIME: f64 = 0.5;
 const AFTER_TIME: f64 = 0.7;
+/// 粒子 `dt` 的上限（秒）。正常帧是 1/60≈0.017，这里是它的约 6 倍，
+/// 只用来挡住「后台/最小化回来后一帧跨几十秒」这种异常间隔。
+const MAX_PARTICLE_DT: f64 = 0.1;
 const PAUSE_BACKGROUND_ALPHA: f32 = 0.6;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -139,7 +142,13 @@ pub struct GameScene {
     pub music: Music,
 
     state: State,
-    pub last_update_time: f64,
+    /// 上一帧的真实时间。
+    ///
+    /// 必须与粒子 `dt` 用**同一个时钟**（`TimeManager::real_time`，进程/场景起算），
+    /// 不能用音乐时间 `now()`（谱面 0 点起算）—— 两者相差一个偏移，混用后某一帧的
+    /// `dt` 会变成巨大值，把所有粒子一口气推进生命周期尽头（特効突然变小/消失）。
+    /// `None` 表示还没跑过一帧。
+    pub last_update_time: Option<f64>,
     pause_rewind: PauseRewind,
     pause_first_time: f32,
 
@@ -163,7 +172,7 @@ macro_rules! reset {
         $self.music.seek_to(0.)?;
         $tm.speed = $res.config.speed as _;
         $tm.reset();
-        $self.last_update_time = $tm.now();
+        $self.last_update_time = Some($tm.real_time());
         $self.state = State::Starting;
         $self.pause_rewind = PauseRewind {
             time: None,
@@ -445,7 +454,7 @@ impl GameScene {
             music,
 
             state: State::Starting,
-            last_update_time: 0.,
+            last_update_time: None,
             pause_rewind: PauseRewind {
                 time: None,
                 duration: None,
@@ -1125,7 +1134,7 @@ impl Scene for GameScene {
                     self.state = State::BeforeMusic;
                     tm.reset();
                     tm.seek_to(self.exercise_range.start);
-                    self.last_update_time = tm.real_time();
+                    self.last_update_time = Some(tm.real_time());
                     if self.first_in && self.mode == GameMode::Exercise {
                         //tm.pause();
                         //self.music.pause()?;
@@ -1519,7 +1528,8 @@ impl Scene for GameScene {
 
         self.bad_notes.retain(|dummy| dummy.render(res));
         let t = tm.real_time();
-        let dt = (t - std::mem::replace(&mut self.last_update_time, t)) as f32;
+        // 夹一个上限：后台/最小化回来后一帧的真实间隔可能是几十秒，不夹会瞬间清空粒子。
+        let dt = (t - self.last_update_time.replace(t).unwrap_or(t)).clamp(0., MAX_PARTICLE_DT) as f32;
         if res.config.particle {
             res.emitter.draw(dt);
         }
