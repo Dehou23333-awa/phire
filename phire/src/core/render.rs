@@ -22,6 +22,33 @@ pub fn copy_fbo(src: GLuint, dst: GLuint, dim: (u32, u32)) -> bool {
     }
 }
 
+/// 把 `src` 的整块内容**缩放**着拷到 `dst`（尺寸可以不同）。
+///
+/// `linear` 时用双线性插值（降采样用，对应官方 `CommandBuffer.Blit` 到小 RT），
+/// 否则最近邻（MSAA resolve 必须用最近邻，见 [`copy_fbo`]）。
+pub fn rescale_fbo(src: GLuint, dst: GLuint, src_dim: (u32, u32), dst_dim: (u32, u32), linear: bool) -> bool {
+    unsafe {
+        use miniquad::gl::*;
+        // 先清掉历史错误，否则拿到的是上一趟的。
+        while glGetError() != GL_NO_ERROR {}
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, src);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst);
+        glBlitFramebuffer(
+            0,
+            0,
+            src_dim.0 as i32,
+            src_dim.1 as i32,
+            0,
+            0,
+            dst_dim.0 as i32,
+            dst_dim.1 as i32,
+            GL_COLOR_BUFFER_BIT,
+            if linear { GL_LINEAR } else { GL_NEAREST },
+        );
+        glGetError() == GL_NO_ERROR
+    }
+}
+
 fn get_fbo(target: &RenderTarget) -> GLuint {
     let gl = unsafe { get_internal_gl() };
     let rp = target.render_pass.raw_miniquad_id();
@@ -36,6 +63,16 @@ fn get_fbo(target: &RenderTarget) -> GLuint {
 
 pub fn internal_id(target: RenderTarget) -> GLuint {
     get_fbo(&target)
+}
+
+/// 单采样 RGB8 的 render target。
+///
+/// 谱面 target 就是 RGB8（见 [`create_render_target_rgb8`]），而 macroquad 的
+/// `render_target()` 用的是 RGBA8。GLES3 的 `glBlitFramebuffer` **要求读写格式一致**，
+/// 否则整趟 blit 被拒（INVALID_OPERATION）且目标内容未定义 —— 想用缩放 blit 拷底图，
+/// 目标必须也是 RGB8。
+pub fn rgb8_render_target(width: u32, height: u32) -> RenderTarget {
+    create_render_target_rgb8(width, height, 1)
 }
 
 fn create_render_target_rgb8(width: u32, height: u32, sample_count: i32) -> RenderTarget {

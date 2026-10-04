@@ -19,7 +19,7 @@
 //! 对 APK 重新核对（任何漂移都会立刻报出来）。
 
 use super::{BlockPhase, Matrix, Resource, Vector, Zone};
-use crate::core::{copy_fbo, internal_id};
+use crate::core::{internal_id, rescale_fbo, rgb8_render_target};
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation, PipelineParams, RenderingBackend, TextureWrap, UniformDesc, UniformType};
 use macroquad::prelude::*;
 use once_cell::sync::Lazy;
@@ -101,12 +101,17 @@ struct FrameTextures {
     effect: Option<Texture2D>,
     aux: Option<Texture2D>,
     touch: touch::TouchMask,
-    /// Active 层要采样「本帧已经画完的底图」。官方是将 ActiveBlock 叠在同张 camera target 上
-    /// （读的是别处的拷贝），所以这里把底图拷到自己的纹理，再叠回**同一张** target。
+    /// Active 层要采样「本帧已经画完的底图」。
+    ///
+    /// 官方是 `sceneColorRT = Screen / 3`，用一个 `CommandBuffer.Blit` **降采样**进去
+    /// （缩小时是双线性），然后 shader 里按 `/3` 网格点采样（`snapshotSample`）。
+    /// 所以这里也做一张 `floor(size/3)` 的小 RT 并缩放拷入，而不是在全分辨率上点采样。
     ///
     /// 不要用 `MSRenderTarget` 的双缓冲交换代替：交换后新 buffer 里是**上一帧**的残影，
     /// 而 shader 是 `One / OneMinusSrcAlpha`，半透明处会把旧帧漏出来（帧间会发散）。
-    scene: Option<(RenderTarget, u32)>,
+    scene: Option<(RenderTarget, u32, (u32, u32))>,
+    /// 不要把 `scene` 上传失败的警告刷满日志。
+    scene_warned: bool,
     /// Unity `_Time` 在同一帧的所有 pass 里是同一个值，这里缓存它。
     clock: Option<f32>,
 }
@@ -365,22 +370,34 @@ fn draw_layer(
 
     gl.flush();
 
-    // Active 层采样底图：把当前 render target 拷到自己的纹理，然后**仍写回同一张 target**
-    // （官方就是叠在同一张 camera target 上）。
+    // Active 层采样底图：按官方做法先**降采样**到 `floor(size/3)`（缩小用双线性），
+    // 然后**仍写回同一张 target**（官方就是叠在同一张 camera target 上）。
     let mut scene = None;
     if !disabled {
         let size = (width as u32, height as u32);
+        // 官方是整数除法 `Screen / 3`（`CreateRenderTexture` 的调用点）。
+        let small = ((width / 3).max(1) as u32, (height / 3).max(1) as u32);
         FRAME.with(|frame| {
             let mut frame = frame.borrow_mut();
-            if frame.scene.as_ref().is_none_or(|(texture, _)| (texture.texture.width() as u32, texture.texture.height() as u32) != size) {
-                let target = render_target(size.0, size.1);
+            if frame
+                .scene
+                .as_ref()
+                .is_none_or(|(_, _, dim)| *dim != small)
+            {
+                let target = rgb8_render_target(small.0, small.1);
+                // 官方 `sceneColorRT` 的 FilterMode 是 Point。
+                target.texture.set_filter(FilterMode::Nearest);
                 let fbo = internal_id(target.clone());
-                frame.scene = Some((target, fbo));
+                frame.scene = Some((target, fbo, small));
             }
-            let (target, fbo) = frame.scene.as_ref().unwrap();
+            let (target, fbo, _) = frame.scene.as_ref().unwrap();
             scene = Some(target.texture.clone());
             let source = draw_onto.as_ref().map(|it| internal_id(it.clone())).unwrap_or(0);
-            copy_fbo(source, *fbo, size);
+            if !rescale_fbo(source, *fbo, size, small, true) && !frame.scene_warned {
+                frame.scene_warned = true;
+                // tracing 未必初始化过，直接写 stderr 保证能看到。
+                eprintln!("block-area: scene downsample blit failed (src={source}, {}x{} -> {}x{})", size.0, size.1, small.0, small.1);
+            }
         });
     }
     let scene = scene.unwrap_or_else(|| EMPTY_TEX.clone());

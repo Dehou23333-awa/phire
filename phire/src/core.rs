@@ -40,7 +40,7 @@ mod object;
 pub use object::{CtrlObject, Object};
 
 mod render;
-pub use render::{copy_fbo, internal_id, MSRenderTarget};
+pub use render::{copy_fbo, internal_id, rescale_fbo, rgb8_render_target, MSRenderTarget};
 
 mod resource;
 pub use resource::{NoteStyle, ParticleEmitter, ResPackInfo, Resource, ResourcePack, SfxMap, BUFFER_SIZE, DPI_VALUE};
