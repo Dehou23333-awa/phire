@@ -47,3 +47,9 @@ inner.rs
 
 /log*
 /.vscode
+
+# block-area 官方提取贴图 / 反编译产物 —— 属「官方资源解码」，不入公开仓库（与 Phira Pro 同策略）
+/assets/blockarea
+/docs/block-area/official-asset-state.json
+/docs/block-area/*.glsl.official
+/docs/block-area/native/

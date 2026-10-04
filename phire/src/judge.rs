@@ -1,6 +1,6 @@
 use crate::{
     config::Config,
-    core::{BadNote, Chart, NOTE_WIDTH_RATIO_BASE, Note, NoteKind, Point, Resource, Vector},
+    core::{block_touch_blocked, BadNote, Chart, NOTE_WIDTH_RATIO_BASE, Note, NoteKind, Point, Resource, Vector},
     ext::{NotNanExt, get_viewport},
 };
 use macroquad::prelude::{
@@ -287,6 +287,12 @@ pub struct Judge {
 
     key_down_count: u32,
 
+    /// 被遮挡区域「感染」的 finger ID。
+    ///
+    /// 官方 `JudgeControl` 一旦判定某个触点被遮挡，就把它的 finger ID 保留到手指抬起
+    /// 为止（即使中途移出区域也仍然是遮挡态），否则多指滑动时会出现闪烁。
+    pub infected: std::collections::HashSet<u64>,
+
     pub(crate) inner: JudgeInner,
     pub judgements: RefCell<Vec<(f64, u32, u32, Result<Judgement, bool>)>>,
 }
@@ -319,6 +325,8 @@ impl Judge {
 
             key_down_count: 0,
 
+            infected: Default::default(),
+
             inner: JudgeInner::new(chart.lines.iter().map(|it| it.notes.iter().filter(|it| !it.fake).count() as u32).sum()),
             judgements: RefCell::new(Vec::new()),
         }
@@ -327,6 +335,7 @@ impl Judge {
     pub fn reset(&mut self) {
         self.notes.iter_mut().for_each(|it| it.1 = 0);
         self.trackers.clear();
+        self.infected.clear();
         self.inner.reset();
         self.judgements.borrow_mut().clear();
     }
@@ -512,7 +521,7 @@ impl Judge {
                 }
             }
         }
-        let touches: Vec<Touch> = touches
+        let mut touches: Vec<Touch> = touches
             .into_values()
             .map(|mut it| {
                 it.time = if it.time.is_infinite() {
@@ -523,6 +532,32 @@ impl Judge {
                 it
             })
             .collect();
+
+        // 剧情遮挡区域（Phigros 4.0 `blockAreaList`）：落在 active 区域内的触点会被
+        // **从触点列表里摘掉**，所以它盖住的音符根本不会被命中，最终算 miss。
+        //
+        // `touches` 里的位置已经是 chart 空间（x 向右、y 向下，见 `touch_transform`），
+        // 而区域几何用的是 chart 空间（y 向上），所以这里对 y 取反 —— 与下面
+        // `inv.transform_point(&Point::new(p.x, -p.y))` 的约定一致。
+        if !chart.block_areas.is_empty() {
+            let aspect = res.aspect_ratio;
+            let areas = &chart.block_areas;
+            let mut blocked = Vec::new();
+            let down: std::collections::HashSet<u64> = touches.iter().map(|touch| touch.id).collect();
+            // 抬起的手指不再占用 finger ID。
+            self.infected.retain(|id| down.contains(id));
+            touches.retain(|touch| {
+                let p = Vector::new(touch.position.x, -touch.position.y);
+                if self.infected.contains(&touch.id) || block_touch_blocked(areas, p, t, aspect) {
+                    self.infected.insert(touch.id);
+                    blocked.push((touch.id, p));
+                    false
+                } else {
+                    true
+                }
+            });
+            chart.blocked_touches = blocked;
+        }
         // pos[line][touch]
         let mut pos = Vec::<Vec<Option<Point>>>::with_capacity(chart.lines.len());
         for id in 0..chart.lines.len() {

@@ -12,6 +12,12 @@ pub type Matrix = nalgebra::Matrix3<f32>;
 mod anim;
 pub use anim::{Anim, AnimFloat, AnimFloatF64, AnimVector, Keyframe};
 
+mod block;
+pub use block::{
+    block_touch_blocked, eased_progress as block_eased_progress, pct_to_chart as block_pct_to_chart, touch_inset_world, BlockArea, BlockMoveEvent, BlockPhase, BlockRotateEvent, BlockScaleEvent,
+    BlockTransform, EASE_COUNT, EASE_HOLD, EASE_JUMP, EASE_LINEAR, EASE_SAMPLES,
+};
+
 mod chart;
 pub use chart::{Chart, ChartExtra, ChartSettings, HitSoundMap};
 

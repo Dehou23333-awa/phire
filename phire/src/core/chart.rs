@@ -1,6 +1,6 @@
 crate::tl_file!("parser");
 
-use super::{BpmList, Effect, JudgeLine, JudgeLineKind, Matrix, Resource, UIElement, Vector};
+use super::{BlockArea, BpmList, Effect, JudgeLine, JudgeLineKind, Matrix, Resource, UIElement, Vector};
 use crate::{core::Object, fs::FileSystem, judge::JudgeStatus, ui::{TextPainter, Ui}};
 use anyhow::{Context, Result};
 use macroquad::prelude::*;
@@ -35,6 +35,11 @@ pub struct Chart {
     pub hitsounds: HitSoundMap,
     pub fonts: Vec<RefCell<TextPainter>>,
 
+    /// Phigros 4.0 `blockAreaList`：剧情遮挡区域。
+    pub block_areas: Vec<BlockArea>,
+    /// 本帧被遮挡区域拦截的触点（finger ID -> chart 空间位置），供 hover 视觉用。
+    pub blocked_touches: Vec<(u64, Vector)>,
+
     order: Vec<usize>,
     attach_ui: [Option<usize>; 7],
     trs: Vec<Matrix>,
@@ -66,6 +71,8 @@ impl Chart {
             attach_ui,
             hitsounds,
             fonts,
+            block_areas: Vec::new(),
+            blocked_touches: Vec::new(),
             trs,
         }
     }
@@ -104,6 +111,7 @@ impl Chart {
     }
 
     pub fn reset(&mut self) {
+        self.blocked_touches.clear();
         self.lines
             .iter_mut()
             .flat_map(|it| it.notes.iter_mut())
