@@ -389,6 +389,12 @@ impl GameScene {
 
         let judge = Judge::new(&chart);
 
+        // 噪域的 Active 层要采样完整底图，而 `Resource::update_size` 只在
+        // `no_effect == false` 时才建 `chart_target`。谱面带噪域时必须让它走 render target
+        // 路径：交换后从旧图采样、往新图写（同 `core/effect.rs` 的后处理），
+        // 帧末再整体 blit 到屏幕。否则无 effect 的谱面（默认情形）没有可采样的底图。
+        let has_block_area = config.render_block_area && !chart.block_areas.is_empty();
+
         let info_offset = info.offset;
         let mut res = Resource::new(
             config,
@@ -397,7 +403,7 @@ impl GameScene {
             player.as_ref().and_then(|it| it.avatar.clone()),
             background,
             illustration,
-            chart.extra.effects.is_empty() && effects.is_empty(),
+            chart.extra.effects.is_empty() && effects.is_empty() && !has_block_area,
         )
         .await
         .context("Failed to load resources")?;
