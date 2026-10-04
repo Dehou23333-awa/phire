@@ -43,8 +43,6 @@ use inner::*;
 
 pub const WAIT_TIME: f64 = 0.5;
 const AFTER_TIME: f64 = 0.7;
-/// 粒子 `dt` 的上限（秒）。正常帧是 1/60≈0.017，这里是它的约 6 倍，
-/// 只用来挡住「后台/最小化回来后一帧跨几十秒」这种异常间隔。
 const MAX_PARTICLE_DT: f64 = 0.1;
 const PAUSE_BACKGROUND_ALPHA: f32 = 0.6;
 
@@ -142,12 +140,6 @@ pub struct GameScene {
     pub music: Music,
 
     state: State,
-    /// 上一帧的真实时间。
-    ///
-    /// 必须与粒子 `dt` 用**同一个时钟**（`TimeManager::real_time`，进程/场景起算），
-    /// 不能用音乐时间 `now()`（谱面 0 点起算）—— 两者相差一个偏移，混用后某一帧的
-    /// `dt` 会变成巨大值，把所有粒子一口气推进生命周期尽头（特効突然变小/消失）。
-    /// `None` 表示还没跑过一帧。
     pub last_update_time: Option<f64>,
     pause_rewind: PauseRewind,
     pause_first_time: f32,
@@ -165,7 +157,6 @@ macro_rules! reset {
         $self.bad_notes.clear();
         $self.judge.reset();
         $self.chart.reset();
-        // 噪域的 hover / 帧内时钟不能跨重试保留。
         reset_block_effects();
         $res.reset();
         $self.music.pause()?;
@@ -201,7 +192,6 @@ macro_rules! reset_music_speed {
         $self.music.seek_to(now).ok();
     }};
 }
-
 
 impl GameScene {
     pub const BEFORE_TIME: f64 = 0.7;
@@ -319,7 +309,6 @@ impl GameScene {
         result
     }
     
-
     pub async fn load_chart(fs: &mut dyn FileSystem, info: &ChartInfo, config: &Config) -> Result<(Chart, ChartFormat)> {
         let extra = if config.render_extra {
             if let Some(extra) = fs.load_file("extra.json").await.ok().map(String::from_utf8).transpose()? {
@@ -385,7 +374,6 @@ impl GameScene {
             Self::load_chart(fs.deref_mut(), &info, &config).await?
         };
         let effects = std::mem::take(&mut chart.extra.global_effects);
-        // 谱面带噪域时，提前链接 shader / 解码贴图，免得第一片噪域出现时卡一帧。
         if !chart.block_areas.is_empty() {
             prepare_block_effects();
         }
@@ -398,10 +386,6 @@ impl GameScene {
 
         let judge = Judge::new(&chart);
 
-        // 噪域的 Active 层要采样完整底图，而 `Resource::update_size` 只在
-        // `no_effect == false` 时才建 `chart_target`。谱面带噪域时必须让它走 render target
-        // 路径：交换后从旧图采样、往新图写（同 `core/effect.rs` 的后处理），
-        // 帧末再整体 blit 到屏幕。否则无 effect 的谱面（默认情形）没有可采样的底图。
         let has_block_area = config.render_block_area && !chart.block_areas.is_empty();
 
         let info_offset = info.offset;
@@ -1528,7 +1512,6 @@ impl Scene for GameScene {
 
         self.bad_notes.retain(|dummy| dummy.render(res));
         let t = tm.real_time();
-        // 夹一个上限：后台/最小化回来后一帧的真实间隔可能是几十秒，不夹会瞬间清空粒子。
         let dt = (t - self.last_update_time.replace(t).unwrap_or(t)).clamp(0., MAX_PARTICLE_DT) as f32;
         if res.config.particle {
             res.emitter.draw(dt);
@@ -1607,8 +1590,6 @@ impl Scene for GameScene {
             self.overlay_ui(ui, tm)?;
         }
 
-        // Active 遮挡层：官方挂在 `CameraEvent.AfterForwardAlpha`，也就是音符、特效、
-        // 游戏 HUD 全部画完之后，采样的才是完整底图。
         self.chart.render_block_overlay(&mut self.res);
 
         if !self.res.no_effect || msaa || self.res.config.low_resolution_mode {

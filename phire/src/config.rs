@@ -111,15 +111,7 @@ pub struct Config {
     pub render_bg_dim: bool,
     pub preserve_framebuffer: bool,
     pub render_extra: bool,
-    /// Phigros 4.0 剧情遮挡区域（`blockAreaList`）。
-    ///
-    /// 关掉后完全不进遮罩/材质管线，行为与没有该功能的版本一致。
     pub render_block_area: bool,
-    /// 噪域动画时钟相对于**歌曲时间**的偏移（秒）。
-    ///
-    /// 官方的噪波/位移相位来自 Unity 的 `_Time`（即 `Time.time`，从**启动游戏**算起），
-    /// 所以「启动到进曲」的延迟会整体平移相位。这里用歌曲时间 + 本偏移：
-    /// 既确定可重现，又能通过调这个值对齐任意一份官方录制。
     pub block_area_clock_offset: f32,
     pub bg_blurriness: f32,
 

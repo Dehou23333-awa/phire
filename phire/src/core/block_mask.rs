@@ -1,19 +1,6 @@
-//! 官方 mask / EdgeMask / GlowMask 三趟的 CPU 等价实现。
-//!
-//! 用位行（`u64`）存二值遮罩，让 3×3 膨胀在没有任何离屏 FBO 的情况下也够便宜。
-//! 算法逐行对应 Phira Pro 的 `block_mask.rs`（其正确性已由它的 GPU oracle 对照过
-//! 官方 GLSL），这里只改了模块路径与注释。
-//!
-//! 产出两张贴图给 `block_shader.rs`：
-//!
-//! * `rgba`     —— R=启用后的 Compose、G=Edge、B=Glow、A=未启用 Compose
-//! * `aux_rgba` —— R=Ready-only 法线、G=Ready-only subtract、B=未启用 Compose、A=hover
-
 use super::Zone;
 use once_cell::sync::Lazy;
 
-/// 官方位移贴图，**上下翻转后**才是 GPU 采样看到的行序
-/// （导出的 PNG 是自上而下，GLES 纹理坐标自下而上）。
 static DISPLACE: Lazy<image::RgbImage> = Lazy::new(|| {
     let source = image::load_from_memory(include_bytes!("../../../assets/blockarea/BlockNoise1.png"))
         .expect("官方 BlockNoise1.png 缺失，见 docs/block-area/extract_official_assets.py")
@@ -23,13 +10,9 @@ static DISPLACE: Lazy<image::RgbImage> = Lazy::new(|| {
 
 #[derive(Default)]
 pub(super) struct Masks {
-    /// 效果遮罩（RGBA），尺寸是 1/8 分辨率再 2 倍 = 1/4。
     pub rgba: Vec<u8>,
-    /// 辅助遮罩：Ready-only 法线 R、Ready-only 后处理 subtract G、未启用 Compose、hover。
     pub aux_rgba: Vec<u8>,
-    /// 点采样出来的六个相机源，按 启用法线/启用subtract/未启用法线/未启用subtract 打包。
     pub sources_rgba: Vec<u8>,
-    /// 未启用 subtract 的原始 G 通道（后处理前）。
     pub raw_disabled_green: Vec<u8>,
     pub width: usize,
     pub height: usize,
@@ -51,11 +34,9 @@ pub(super) struct Masks {
 }
 
 impl Masks {
-    /// 在 1/8 分辨率上栅格化六个相机源，再做 Compose 位移与 Edge/Glow，最后放大 2 倍。
     pub fn render_displaced(&mut self, width: usize, height: usize, aspect: f32, zones: &[Zone], time: f32) {
         let (bw, bh) = ((width / 8).max(1), (height / 8).max(1));
         let (ew, eh) = (bw * 2, bh * 2);
-        // 同一维度 / 同一组区域 / 同一时刻可以直接复用上一帧。
         if self.last_dim == (ew, eh, aspect) && self.last_zones == zones && self.last_time == Some(time) {
             return;
         }
@@ -71,9 +52,6 @@ impl Masks {
             self.raw_disabled_green.fill(0);
             self.ready_green.resize(bw * bh, 0);
             self.ready_green.fill(0);
-            // 官方六个相机分别抓：启用 法线/subtract、未启用 法线/subtract（含 Ready）、
-            // Ready-only 法线/subtract。BlockSprite 用 SrcAlpha/One 混合，
-            // 每个 subtract sprite 的 alpha 固定 0.1。
             for z in zones {
                 let layer = if z.active { usize::from(z.invert) } else { 2 + usize::from(z.invert) };
                 let opacity = if z.invert { 0.1 } else { z.opacity };
@@ -125,8 +103,6 @@ impl Masks {
         let stride = ew.div_ceil(64);
         self.active.resize(stride * eh, 0);
         self.active.fill(0);
-        // 官方两次位移采样共用同一个 Y 坐标，所以按行/列预计算镜像纹理下标，
-        // 免得每个遮罩像素都做四次浮点取余 + 查表。
         let texture = &*DISPLACE;
         let pixels = texture.as_raw();
         let texture_stride = texture.width() as usize * 3;
@@ -173,10 +149,8 @@ impl Masks {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// EdgeMask + GlowMask：对二值遮罩做 6 趟 3×3 膨胀，逐趟取「新鼓出来的一圈」。
     fn render_rings(&mut self) {
         let (width, height) = (self.width, self.height);
-        // 部分透明（subtract 的 0.1 权重）走灰度慢路径。
         if self.rgba.chunks_exact(4).any(|p| p[0] != 0 && p[0] != 255) {
             self.render_gray_rings();
             return;
@@ -245,7 +219,6 @@ impl Masks {
     }
 }
 
-/// GlowMask 的 6 趟权重：`(6-pass)^2.65 / Σ`。
 fn glow_weights() -> [f32; 6] {
     static WEIGHTS: Lazy<[f32; 6]> = Lazy::new(|| {
         let sum: f32 = (1..=6).map(|k| (k as f32).powf(2.65)).sum();
@@ -259,9 +232,6 @@ fn unorm(v: f32) -> u8 {
     (v.clamp(0., 1.) * 255.).round() as u8
 }
 
-/// 官方 `SubtractBlockBlender` 第 0 趟：**阈值带通**，不是奇偶。
-///
-/// 注意这与 `block.rs` 里输入判定用的奇偶规则**故意不同**。
 #[inline]
 fn subtract_enabled(red: u8) -> f32 {
     let r = red as f32 / 255.;
@@ -272,21 +242,14 @@ fn subtract_enabled(red: u8) -> f32 {
     }
 }
 
-/// 官方 `SubtractBlockBlender` 第 1 趟（未启用版）。
 fn subtract_disabled(red: u8, green: u8) -> (f32, f32) {
     let g = green as f32 / 255.;
     let t = ((g - 0.2) * -10.).clamp(0., 1.);
     let r = subtract_enabled(red) + t * t * (3. - 2. * t);
-    // 中间结果是 RG16，shader 输出后要 clamp 再 round。
     (unorm(r) as f32 / 255., unorm(g * r * 10.) as f32 / 255.)
 }
 
-/// 官方 `BlockCompose` 第 0 趟的位移。
-///
-/// 原生 `u_xlat16_*` 是 mediump（binary16）而不是 CPU 全精度浮点：导出的 GLES shader 里
-/// 逆长度、方向、采样到的噪声、减去 0.5 之后的值各自单独舍入到 f16。
-/// 之后的 warp 坐标保持 highp —— 点采样时这一步会影响取到哪个 texel。
-#[allow(dead_code)] // 供将来的 GPU oracle 对照用
+#[allow(dead_code)]
 pub(super) fn compose_uv(uv: [f32; 2], time: f32) -> [f32; 2] {
     let d = medium(0.5 * medium((0.5_f32).sqrt().recip()));
     let t = time / 20. * 2.59;
@@ -296,13 +259,11 @@ pub(super) fn compose_uv(uv: [f32; 2], time: f32) -> [f32; 2] {
     [(d * a + b * -d) * 0.1 + uv[0], (d * a + b * d) * 0.1 + uv[1]]
 }
 
-/// 把 f32 按 binary16 精度舍入（10 位尾数、就近取偶）。
 fn medium(value: f32) -> f32 {
     let bits = value.to_bits();
     f32::from_bits((bits + 0xfff + ((bits >> 13) & 1)) & !0x1fff)
 }
 
-/// 官方纹理是 `Mirror` wrap，这里手工做镜像取模。
 fn noise_index(v: f32, size: u32) -> u32 {
     let v = v.rem_euclid(2.);
     let v = if v > 1. { 2. - v } else { v };
@@ -313,7 +274,6 @@ fn noise(uv: [f32; 2]) -> f32 {
     DISPLACE.get_pixel(noise_index(uv[0], DISPLACE.width()), noise_index(uv[1], DISPLACE.height()))[0] as f32 / 255.
 }
 
-/// 把一块矩形栅格化成逐行的 `[first, last)` 列区间（旋转矩形用扫描线求交）。
 fn raster_rows(width: usize, height: usize, aspect: f32, zone: &Zone, mut write: impl FnMut(usize, usize, usize)) {
     if zone.half.x <= 0. || zone.half.y <= 0. {
         return;
@@ -349,7 +309,6 @@ fn raster_rows(width: usize, height: usize, aspect: f32, zone: &Zone, mut write:
     }
 }
 
-/// 3×3 膨胀，把二值遮罩按位行展开。
 fn dilate(source: &[u64], dest: &mut [u64], width: usize, height: usize) {
     let stride = width.div_ceil(64);
     let last_mask = u64::MAX >> ((64 - width % 64) % 64);
@@ -373,7 +332,6 @@ mod tests {
     use super::*;
     use crate::core::Vector;
 
-    /// mediump 中间量的舍入（binary16、就近取偶）。
     #[test]
     fn mediump_intermediates_round_like_binary16() {
         assert_eq!(medium(0.5 * medium((0.5_f32).sqrt().recip())), 0.70703125);
@@ -394,7 +352,6 @@ mod tests {
         }
     }
 
-    /// 位行膨胀必须与朴素 3×3 参考实现逐像素一致，包括跨 `u64` 边界。
     #[test]
     fn nine_tap_dilation_matches_pixel_reference_across_word_boundaries() {
         for width in [1_usize, 63, 64, 65, 129] {
@@ -426,7 +383,6 @@ mod tests {
         }
     }
 
-    /// 六个相机源 = 逐像素的「点在不在矩形里」，subtract 按 0.1 累加后取 unorm。
     #[test]
     fn raw_camera_layers_match_resolved_rectangle_coverage() {
         let zones = [
@@ -459,7 +415,6 @@ mod tests {
         }
     }
 
-    /// 外侧描边只出现在边界上，不与内部填充打架；两个重叠块之间不该出现描边。
     #[test]
     fn exterior_rings_leave_fill_and_union_interiors_unchanged() {
         let mut masks = Masks::default();
@@ -478,7 +433,6 @@ mod tests {
         assert!(masks.rgba.chunks_exact(4).any(|p| p[1] == 255));
     }
 
-    /// 两个完全重合的 subtract 块互相抵消，不留幻影边；区域数量无上限。
     #[test]
     fn subtract_cancellation_has_no_phantom_edges_and_zone_count_is_unbounded() {
         let mut masks = Masks::default();
@@ -488,7 +442,6 @@ mod tests {
         zones.push(zone(0., 0., 0.2, 0.2, 0., false));
         masks.render_displaced(800, 800, 1., &zones, 1.);
         assert_eq!(masks.rgba[(100 * masks.width + 100) * 4], 255);
-        // 同一维度 + 同一组区域 + 同一时刻：结果必须完全可复用。
         let previous = masks.rgba.clone();
         masks.render_displaced(800, 800, 1., &zones, 1.);
         assert_eq!(masks.rgba, previous);

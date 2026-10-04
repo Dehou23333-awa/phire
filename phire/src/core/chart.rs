@@ -35,9 +35,7 @@ pub struct Chart {
     pub hitsounds: HitSoundMap,
     pub fonts: Vec<RefCell<TextPainter>>,
 
-    /// Phigros 4.0 `blockAreaList`：剧情遮挡区域。
     pub block_areas: Vec<BlockArea>,
-    /// 本帧被遮挡区域拦截的触点（finger ID -> chart 空间位置），供 hover 视觉用。
     pub blocked_touches: Vec<(u64, Vector)>,
 
     order: Vec<usize>,
@@ -149,12 +147,8 @@ impl Chart {
 
     pub fn render(&self, ui: &mut Ui, res: &mut Resource) {
         res.apply_model_of(&Matrix::identity().append_nonuniform_scaling(&Vector::new(if res.config.flip_x() { -1. } else { 1. }, -1.)), |res| {
-            // 遮挡区域分两层，这一层是 **Disabled / Ready**，官方在 Background
-            // sorting layer order 2，也就是判定线（order 3）**之前**。
-            // Active 层在 HUD 之后，见 `render_block_overlay`。
             if res.config.render_block_area {
                 let zones = visible_zones(&self.block_areas, res.time, res.aspect_ratio);
-                // 和 `GameScene::render` 算 `chart_onto` 时同一套：MSAA 时谱面画在 `input()` 上。
                 let onto = res
                     .chart_target
                     .as_ref()
@@ -205,11 +199,6 @@ impl Chart {
         });
     }
 
-    /// 画 **Active** 遮挡层。
-    ///
-    /// 官方把它挂在 `CameraEvent.AfterForwardAlpha`，也就是音符、特效、游戏 HUD
-    /// **全部画完之后**，并且采样的是完整底图。所以必须由 `GameScene` 在 `ui()` /
-    /// `overlay_ui()` 之后调用，不能在 `render()` 里做。
     pub fn render_block_overlay(&self, res: &mut Resource) {
         if !res.config.render_block_area || self.block_areas.is_empty() {
             return;
@@ -219,8 +208,6 @@ impl Chart {
             return;
         }
         let flip_x = res.config.flip_x();
-        // 与 `render()` 里那层同一套 y 翻转（`draw_disabled_zones` 直接落在那层里，
-        // Active 层不在，所以这里自己包）。
         let onto = res.chart_target.as_ref().map(|it| it.output()).or(res.camera.render_target.clone());
         res.apply_model_of(&Matrix::identity().append_nonuniform_scaling(&Vector::new(if flip_x { -1. } else { 1. }, -1.)), |res| {
             draw_zones_with_touches(res, &zones, res.aspect_ratio, &self.blocked_touches, flip_x, onto);

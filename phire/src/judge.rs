@@ -287,10 +287,6 @@ pub struct Judge {
 
     key_down_count: u32,
 
-    /// 被遮挡区域「感染」的 finger ID。
-    ///
-    /// 官方 `JudgeControl` 一旦判定某个触点被遮挡，就把它的 finger ID 保留到手指抬起
-    /// 为止（即使中途移出区域也仍然是遮挡态），否则多指滑动时会出现闪烁。
     pub infected: std::collections::HashSet<u64>,
 
     pub(crate) inner: JudgeInner,
@@ -533,18 +529,11 @@ impl Judge {
             })
             .collect();
 
-        // 剧情遮挡区域（Phigros 4.0 `blockAreaList`）：落在 active 区域内的触点会被
-        // **从触点列表里摘掉**，所以它盖住的音符根本不会被命中，最终算 miss。
-        //
-        // `touches` 里的位置已经是 chart 空间（x 向右、y 向下，见 `touch_transform`），
-        // 而区域几何用的是 chart 空间（y 向上），所以这里对 y 取反 —— 与下面
-        // `inv.transform_point(&Point::new(p.x, -p.y))` 的约定一致。
         if !chart.block_areas.is_empty() {
             let aspect = res.aspect_ratio;
             let areas = &chart.block_areas;
             let mut blocked = Vec::new();
             let down: std::collections::HashSet<u64> = touches.iter().map(|touch| touch.id).collect();
-            // 抬起的手指不再占用 finger ID。
             self.infected.retain(|id| down.contains(id));
             touches.retain(|touch| {
                 let p = Vector::new(touch.position.x, -touch.position.y);

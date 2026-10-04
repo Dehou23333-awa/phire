@@ -72,7 +72,6 @@ REFERENCE_SHA256 = {
     "TouchHover.png": "59171418baf7bd52e384b3df17e38ef4ae84e81055a6fcb3f5df202f51299540",
 }
 
-
 def expand_rgb565(words: np.ndarray, mode: str) -> np.ndarray:
     """RGB565 words -> RGB888, either by bit replication or by 255/max scaling."""
     r5 = (words >> 11) & 0x1F
@@ -81,9 +80,8 @@ def expand_rgb565(words: np.ndarray, mode: str) -> np.ndarray:
     if mode == "replicate":
         r, g, b = (r5 << 3) | (r5 >> 2), (g6 << 2) | (g6 >> 4), (b5 << 3) | (b5 >> 2)
     else:
-        r, g, b = r5 * 255 // 31, g6 * 255 // 63, b5 * 255 // 31
+        r, g, b = r5 * 255
     return np.stack([r, g, b], axis=-1).astype(np.uint8)
-
 
 def decode(texture, rgb565_expand: str) -> Image.Image:
     """Decode a Texture2D to a top-down RGBA image.
@@ -105,7 +103,6 @@ def decode(texture, rgb565_expand: str) -> Image.Image:
         image = Image.fromarray(np.flipud(expand_rgb565(words, rgb565_expand)), "RGB")
         return image.convert("RGBA")
     return texture.image.convert("RGBA")
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -170,7 +167,6 @@ def main() -> int:
         print(f"  {source:18s} -> {path}  {image.size[0]}x{image.size[1]}  {FORMAT_NOTE.get(fmt, fmt):7s} {digest[:16]}...{note}")
 
     return status
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -70,18 +70,9 @@ struct PgrChart {
     format_version: u32,
     offset: f64,
     judge_line_list: Vec<PgrJudgeLine>,
-    /// Phigros 4.0 剧情遮挡区域。
     #[serde(default)]
     block_area_list: Vec<PgrBlockArea>,
 }
-
-// ---------------------------------------------------------------------------
-// `blockAreaList` —— Phigros 4.0 的剧情遮挡区域
-//
-// 字段名与 `GameInformation.BlockArea` 一致。`time` 的单位是**秒**：官方
-// `PreviewBlockControl` 直接把它和歌曲时间比较，所以**不做** T(拍) 换算。
-// 几何/缓动语义见 `core/block.rs` 与 `docs/block-area/NATIVE-SEMANTICS.md`。
-// ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -151,7 +142,6 @@ fn pgr_v2(p: PgrVector2) -> Vector {
     Vector::new(p.x, p.y)
 }
 
-/// 把 `blockAreaList` 转成运行时结构。
 fn parse_block_areas(list: Vec<PgrBlockArea>) -> Vec<BlockArea> {
     list.into_iter()
         .map(|b| BlockArea {
