@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   apk:
-    name: build universal apk
+    name: build arm64 apk
     runs-on: ubuntu-latest
     env:
       # Tag of TeamFlos/prpr-avc-ffmpeg that provides the prebuilt ffmpeg
@@ -62,7 +62,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi
+          targets: aarch64-linux-android
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -79,7 +79,7 @@ jobs:
       - name: Fetch ffmpeg static libs
         run: |
           set -euo pipefail
-          for target in aarch64-linux-android armv7-linux-androideabi; do
+          for target in aarch64-linux-android; do
             dest="prpr-avc/static-lib/$target"
             mkdir -p "$dest"
             curl -fsSL --retry 3 \
@@ -94,21 +94,21 @@ jobs:
           set -euo pipefail
           cargo ndk \
             -t aarch64-linux-android \
-            -t armv7-linux-androideabi \
             -o ./android/app/src/main/jniLibs \
             build --release -p phire-ui
           find ./android/app/src/main/jniLibs -name '*.so' -exec ls -la {} \;
 
       # libphire_ui.so links libc++_shared.so (pulled in by oboe/C++ deps) but
       # Gradle does not bundle it, so the app would die with an
-      # UnsatisfiedLinkError on launch. Copy it out of the NDK per ABI.
+      # UnsatisfiedLinkError on launch. Copy it out of the NDK.
+      # Only arm64-v8a is shipped: NDK 27 no longer ships libc++_shared.so for
+      # armeabi-v7a, and every current device is arm64.
       - name: Bundle libc++_shared.so
         run: |
           set -euo pipefail
-          for abi in arm64-v8a armeabi-v7a; do
+          for abi in arm64-v8a; do
             case "$abi" in
-              arm64-v8a)   triple=aarch64-linux-android ;;
-              armeabi-v7a) triple=armv7a-linux-androideabi ;;
+              arm64-v8a) triple=aarch64-linux-android ;;
             esac
             src=$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -path "*/$triple/libc++_shared.so" | head -1)
             if [ -z "$src" ]; then
@@ -130,10 +130,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp "$(find android/app/build/outputs/apk -name '*.apk' | head -1)" \
-            dist/phira-android-universal.apk
+            dist/phira-android-arm64-v8a.apk
           ls -la dist
           # .so payload + apk size, handy when comparing against the official build
-          unzip -l dist/phira-android-universal.apk | grep -E '\.so$' || true
+          unzip -l dist/phira-android-arm64-v8a.apk | grep -E '\.so$' || true
 
       - uses: actions/upload-artifact@v4
         with:
