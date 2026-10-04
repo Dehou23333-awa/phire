@@ -23,6 +23,16 @@ android {
         }
     }
 
+    sourceSets {
+        main {
+            // On Android macroquad reads assets through AssetManager with bare
+            // names ("font.ttf", not "assets/font.ttf"), so the files have to sit
+            // at the root of the APK's assets/. Point the source set at the
+            // repository's assets/ instead of copying them in.
+            assets.srcDirs += ['../../assets']
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17

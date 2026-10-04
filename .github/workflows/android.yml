@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   apk:
-    name: build arm64 apk
+    name: build apk (arm64-v8a + x86_64)
     runs-on: ubuntu-latest
     env:
       # Tag of TeamFlos/prpr-avc-ffmpeg that provides the prebuilt ffmpeg
@@ -62,7 +62,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
@@ -79,7 +79,7 @@ jobs:
       - name: Fetch ffmpeg static libs
         run: |
           set -euo pipefail
-          for target in aarch64-linux-android; do
+          for target in aarch64-linux-android x86_64-linux-android; do
             dest="prpr-avc/static-lib/$target"
             mkdir -p "$dest"
             curl -fsSL --retry 3 \
@@ -91,11 +91,13 @@ jobs:
           # Static libraries only fail at dlopen time, so a mismatched ffmpeg
           # build produces a green CI and an app that dies on launch with
           # UnsatisfiedLinkError. prpr-avc's FFI expects these symbols.
-          for sym in swr_alloc_set_opts swr_convert avcodec_open2 avformat_open_input; do
-            if ! nm -g --defined-only prpr-avc/static-lib/aarch64-linux-android/*.a 2>/dev/null | grep -qw "$sym"; then
-              echo "::error::$sym missing from the ffmpeg static libs (tag ${AVC_TAG})"
-              exit 1
-            fi
+          for target in aarch64-linux-android x86_64-linux-android; do
+            for sym in swr_alloc_set_opts swr_convert avcodec_open2 avformat_open_input; do
+              if ! nm -g --defined-only "prpr-avc/static-lib/$target"/*.a 2>/dev/null | grep -qw "$sym"; then
+                echo "::error::$sym missing from ffmpeg static libs for $target (tag ${AVC_TAG})"
+                exit 1
+              fi
+            done
           done
           echo "ffmpeg symbol check passed" 
 
@@ -111,14 +113,16 @@ jobs:
       # libphire_ui.so links libc++_shared.so (pulled in by oboe/C++ deps) but
       # Gradle does not bundle it, so the app would die with an
       # UnsatisfiedLinkError on launch. Copy it out of the NDK.
-      # Only arm64-v8a is shipped: NDK 27 no longer ships libc++_shared.so for
-      # armeabi-v7a, and every current device is arm64.
+      # armeabi-v7a is deliberately not shipped: NDK 27 no longer provides
+      # libc++_shared.so for it. x86_64 is included so the build can be tested
+      # on an emulator; phones use arm64-v8a.
       - name: Bundle libc++_shared.so
         run: |
           set -euo pipefail
-          for abi in arm64-v8a; do
+          for abi in arm64-v8a x86_64; do
             case "$abi" in
               arm64-v8a) triple=aarch64-linux-android ;;
+              x86_64)    triple=x86_64-linux-android ;;
             esac
             src=$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -path "*/$triple/libc++_shared.so" | head -1)
             if [ -z "$src" ]; then
@@ -140,10 +144,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp "$(find android/app/build/outputs/apk -name '*.apk' | head -1)" \
-            dist/phira-android-arm64-v8a.apk
+            dist/phira-android.apk
           ls -la dist
           # .so payload + apk size, handy when comparing against the official build
-          unzip -l dist/phira-android-arm64-v8a.apk | grep -E '\.so$' || true
+          unzip -l dist/phira-android.apk | grep -E '\.so$' || true
 
       - uses: actions/upload-artifact@v4
         with:
