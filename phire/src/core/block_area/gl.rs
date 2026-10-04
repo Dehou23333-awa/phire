@@ -357,7 +357,7 @@ impl BlockGl {
             }
             self.ring_mat.set_texture("u_main", src.clone());
             self.ring_mat.set_uniform("u_weight", weight);
-            self.ring_mat.set_uniform("u_first", if passes == 0 { 1. } else { 0. });
+            self.ring_mat.set_uniform("u_first", if passes == 0 { 1.0f32 } else { 0.0f32 });
             let dst: &RenderTarget = if use_a { &self.targets.ping_a } else { &self.targets.ping_b };
             self.pass(&self.ring_mat, dst);
             src = dst.texture.clone();
