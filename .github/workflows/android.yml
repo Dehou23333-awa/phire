@@ -43,9 +43,10 @@ jobs:
           set -euo pipefail
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          # sdkmanager is not on PATH by default on the runner.
-          SDKMANAGER=$(find "$SDK/cmdline-tools" -name sdkmanager -type f | head -1)
-          chmod +x "$SDKMANAGER"
+          # sdkmanager is not on PATH and lives under a versioned dir; do not
+          # chmod it, the system copy is not writable by the runner user.
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
           "$SDKMANAGER" --install "ndk;26.1.10909125"
           echo "ANDROID_NDK_HOME=$SDK/ndk/26.1.10909125" >> "$GITHUB_ENV"
           ls "$SDK/ndk"
