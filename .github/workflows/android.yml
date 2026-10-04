@@ -61,7 +61,7 @@ jobs:
           cache-all-crates: 'true'
 
       - name: Install cargo-ndk
-        uses: taiki-e/install-action@cargo-ndk
+        run: cargo install cargo-ndk --locked
 
       # prpr-avc/build.rs looks for ffmpeg under <crate>/static-lib/<TARGET>/,
       # which is gitignored because the binaries are large. The official
