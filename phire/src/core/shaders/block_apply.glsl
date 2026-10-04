@@ -76,6 +76,9 @@ float disp_taps(vec2 uv, vec2 st, float speed, float snap_on, out vec2 off) {
     return (d1 + d2) * 0.5;
 }
 
+vec3 srgb_to_linear(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
+vec3 linear_to_srgb(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
+
 vec3 rgb2hsv(vec3 c) {
     vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
     vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
@@ -166,6 +169,6 @@ void main() {
     }
 
     alpha = clamp(alpha, 0.0, 1.0);
-    vec3 bg = texture2D(u_src, v_uv).rgb;
-    gl_FragColor = vec4(bg * (1.0 - alpha) + acc, 1.0);
+    vec3 bg = srgb_to_linear(texture2D(u_src, v_uv).rgb);
+    gl_FragColor = vec4(linear_to_srgb(bg * (1.0 - alpha) + acc), 1.0);
 }
