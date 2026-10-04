@@ -14,7 +14,8 @@ pub use anim::{Anim, AnimFloat, AnimFloatF64, AnimVector, Keyframe};
 
 mod block;
 pub use block::{
-    block_touch_blocked, eased_progress as block_eased_progress, pct_to_chart as block_pct_to_chart, touch_inset_world, BlockArea, BlockMoveEvent, BlockPhase, BlockRotateEvent, BlockScaleEvent,
+    block_areas_from_file, block_touch_blocked, eased_progress as block_eased_progress, pct_to_chart as block_pct_to_chart, touch_inset_world, BlockArea, BlockAreaFile, BlockAreaFileMoveEvent,
+    BlockAreaFileRotateEvent, BlockAreaFileScaleEvent, BlockAreaFileVec2, BlockMoveEvent, BlockPhase, BlockRotateEvent, BlockScaleEvent,
     BlockTransform, Zone, EASE_COUNT, EASE_HOLD, EASE_JUMP, EASE_LINEAR, EASE_SAMPLES,
 };
 

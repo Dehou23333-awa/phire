@@ -1,5 +1,6 @@
 use super::{Matrix, Point, Vector};
 use nalgebra::Rotation2;
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -206,11 +207,6 @@ fn rotate_around_anchor(point: Vector, anchor: Vector, delta_deg: f32) -> Vector
     anchor + Rotation2::new(delta_deg.to_radians()) * (point - anchor)
 }
 
-#[inline]
-fn by_time<T>(time: impl Fn(&T) -> f64) -> impl Fn(&T) -> f64 {
-    time
-}
-
 impl BlockArea {
     #[inline]
     pub fn is_time_valid(&self, t: f64) -> bool {
@@ -412,6 +408,140 @@ pub fn block_touch_blocked(areas: &[BlockArea], p: Vector, t: f64, aspect: f32) 
     }
 
     (plain as u32) != (subtract & 1) && (plain_inset as u32) != (subtract_inset & 1)
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockAreaFileVec2 {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockAreaFileRotateEvent {
+    #[serde(default)]
+    pub anchor: Option<BlockAreaFileVec2>,
+    pub time: f64,
+    #[serde(default)]
+    pub ease_type: i32,
+    #[serde(default)]
+    pub rotation: f32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockAreaFileMoveEvent {
+    #[serde(default)]
+    pub end_position: Option<BlockAreaFileVec2>,
+    pub time: f64,
+    #[serde(default)]
+    pub ease_type_x: i32,
+    #[serde(default)]
+    pub ease_type_y: i32,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockAreaFileScaleEvent {
+    #[serde(default)]
+    pub anchor: Option<BlockAreaFileVec2>,
+    pub time: f64,
+    #[serde(default)]
+    pub ease_type_x: i32,
+    #[serde(default)]
+    pub ease_type_y: i32,
+    #[serde(default)]
+    pub scale: Option<BlockAreaFileVec2>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockAreaFile {
+    pub top_right_percentage: BlockAreaFileVec2,
+    pub bottom_left_percentage: BlockAreaFileVec2,
+    #[serde(default)]
+    pub appear_time: f64,
+    #[serde(default)]
+    pub enable_time: f64,
+    #[serde(default)]
+    pub disable_time: f64,
+    #[serde(default)]
+    pub disappear_time: f64,
+    #[serde(default)]
+    pub is_subtract: bool,
+    #[serde(default)]
+    pub rotate_events: Vec<BlockAreaFileRotateEvent>,
+    #[serde(default)]
+    pub move_events: Vec<BlockAreaFileMoveEvent>,
+    #[serde(default)]
+    pub scale_events: Vec<BlockAreaFileScaleEvent>,
+}
+
+fn file_vec(p: BlockAreaFileVec2) -> Vector {
+    Vector::new(p.x, p.y)
+}
+
+fn sorted_by_time<T>(mut events: Vec<T>, time: impl Fn(&T) -> f64) -> Vec<T> {
+    events.sort_by(|a, b| time(a).partial_cmp(&time(b)).unwrap_or(std::cmp::Ordering::Equal));
+    events
+}
+
+pub fn block_areas_from_file(list: Vec<BlockAreaFile>) -> Vec<BlockArea> {
+    list.into_iter()
+        .map(|b| {
+            let bl = file_vec(b.bottom_left_percentage);
+            let tr = file_vec(b.top_right_percentage);
+            let center = (bl + tr) * 0.5;
+            let anchor = |a: Option<BlockAreaFileVec2>| a.map(file_vec).unwrap_or(center);
+            BlockArea {
+                top_right: tr,
+                bottom_left: bl,
+                appear_time: b.appear_time,
+                enable_time: b.enable_time,
+                disable_time: b.disable_time,
+                disappear_time: b.disappear_time,
+                is_subtract: b.is_subtract,
+                rotate_events: sorted_by_time(
+                    b.rotate_events
+                        .into_iter()
+                        .map(|e| BlockRotateEvent {
+                            anchor: anchor(e.anchor),
+                            time: e.time,
+                            ease: e.ease_type,
+                            rotation: e.rotation,
+                        })
+                        .collect(),
+                    |e| e.time,
+                ),
+                move_events: sorted_by_time(
+                    b.move_events
+                        .into_iter()
+                        .map(|e| BlockMoveEvent {
+                            end: e.end_position.map(file_vec).unwrap_or(center),
+                            time: e.time,
+                            ease_x: e.ease_type_x,
+                            ease_y: e.ease_type_y,
+                        })
+                        .collect(),
+                    |e| e.time,
+                ),
+                scale_events: sorted_by_time(
+                    b.scale_events
+                        .into_iter()
+                        .map(|e| BlockScaleEvent {
+                            anchor: anchor(e.anchor),
+                            time: e.time,
+                            ease_x: e.ease_type_x,
+                            ease_y: e.ease_type_y,
+                            scale: e.scale.map(file_vec).unwrap_or_else(|| Vector::new(1., 1.)),
+                        })
+                        .collect(),
+                    |e| e.time,
+                ),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -698,5 +828,68 @@ mod tests {
         let inside = Vector::new(0.035, 0.);
         assert!(b.contains(inside, 50., aspect, 0.));
         assert!(!b.contains(inside, 50., aspect, inset));
+    }
+
+    fn file_vec(x: f32, y: f32) -> BlockAreaFileVec2 {
+        BlockAreaFileVec2 { x, y }
+    }
+
+    #[test]
+    fn file_layer_maps_fields_and_sorts_events() {
+        let areas = block_areas_from_file(vec![BlockAreaFile {
+            top_right_percentage: file_vec(1.5, 0.8),
+            bottom_left_percentage: file_vec(-0.2, 0.1),
+            appear_time: 1.675,
+            enable_time: 2.475,
+            disable_time: 11.485,
+            disappear_time: 11.935,
+            is_subtract: true,
+            rotate_events: vec![
+                BlockAreaFileRotateEvent { anchor: Some(file_vec(0.5, 0.5)), time: 30., ease_type: 7, rotation: 90. },
+                BlockAreaFileRotateEvent { anchor: Some(file_vec(0.25, 0.75)), time: 10., ease_type: 3, rotation: -45. },
+            ],
+            move_events: vec![
+                BlockAreaFileMoveEvent { end_position: Some(file_vec(0.9, 0.9)), time: 20., ease_type_x: 1, ease_type_y: 2 },
+                BlockAreaFileMoveEvent { end_position: Some(file_vec(0.1, 0.2)), time: 5., ease_type_x: 4, ease_type_y: 5 },
+            ],
+            scale_events: vec![BlockAreaFileScaleEvent {
+                anchor: None,
+                time: 15.,
+                ease_type_x: 6,
+                ease_type_y: 8,
+                scale: Some(file_vec(2., -3.)),
+            }],
+        }]);
+        let a = &areas[0];
+        assert!(close(a.top_right.x, 1.5));
+        assert!(close(a.bottom_left.y, 0.1));
+        assert!(a.is_subtract);
+        assert!(a.is_time_valid(1.7) && !a.is_time_valid(11.94));
+        assert!(a.is_active(3.) && !a.is_active(11.5));
+        assert_eq!(a.rotate_events.iter().map(|e| e.time).collect::<Vec<_>>(), vec![10., 30.]);
+        assert_eq!(a.move_events.iter().map(|e| e.time).collect::<Vec<_>>(), vec![5., 20.]);
+        assert_eq!(a.rotate_events[0].ease, 3);
+        assert!(close(a.rotate_events[0].rotation, -45.));
+        assert!(close(a.move_events[0].end.x, 0.1));
+        assert_eq!(a.move_events[0].ease_x, 4);
+        assert_eq!(a.move_events[0].ease_y, 5);
+        assert_eq!(a.scale_events[0].ease_x, 6);
+        assert_eq!(a.scale_events[0].ease_y, 8);
+        assert!(close(a.scale_events[0].scale.y, -3.));
+        assert!(close(a.scale_events[0].anchor.x, 0.65));
+    }
+
+    #[test]
+    fn file_layer_accepts_missing_fields() {
+        let raw: Vec<BlockAreaFile> = serde_json::from_str(
+            r#"[{"topRightPercentage":{"x":1.0,"y":1.0},"bottomLeftPercentage":{"x":0.0,"y":0.0}}]"#,
+        )
+        .unwrap();
+        let areas = block_areas_from_file(raw);
+        let a = &areas[0];
+        assert!(close(a.top_right.x, 1.));
+        assert!(!a.is_subtract);
+        assert!(a.rotate_events.is_empty() && a.move_events.is_empty() && a.scale_events.is_empty());
+        assert!(!a.is_time_valid(0.) && !a.is_time_valid(1e9));
     }
 }

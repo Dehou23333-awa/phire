@@ -3,7 +3,7 @@ crate::tl_file!("parser" ptl);
 use super::{process_lines, RPE_TWEEN_MAP};
 use crate::{
     core::{
-        Anim, AnimFloat, AnimFloatF64, AnimVector, BezierTween, BpmList, Chart, ChartExtra, ChartSettings, ClampedTween, CtrlObject, EPS, GeneralIntegralTween, GifFrames, HEIGHT_RATIO, HitSoundMap, IntegralClampedTween, IntegralStaticTween, JudgeLine, JudgeLineCache, JudgeLineKind, Keyframe, Note, NoteKind, Object, SpeedIntegralTween, StaticTween, TextData, Triple, TweenFunction, Tweenable, UIElement, Vector
+        Anim, AnimFloat, AnimFloatF64, AnimVector, BezierTween, BlockAreaFile, BpmList, Chart, ChartExtra, ChartSettings, ClampedTween, CtrlObject, EPS, GeneralIntegralTween, GifFrames, HEIGHT_RATIO, HitSoundMap, IntegralClampedTween, IntegralStaticTween, JudgeLine, JudgeLineCache, JudgeLineKind, Keyframe, Note, NoteKind, Object, SpeedIntegralTween, StaticTween, TextData, Triple, TweenFunction, Tweenable, UIElement, Vector, block_areas_from_file
     },
     ext::{NotNanExt, SafeTexture},
     fs::FileSystem,
@@ -261,6 +261,8 @@ pub struct RPEChart {
     #[serde(rename = "BPMList")]
     bpm_list: Vec<RPEBpmItem>,
     judge_line_list: Vec<RPEJudgeLine>,
+    #[serde(default)]
+    block_area_list: Vec<BlockAreaFile>,
 }
 
 fn parse_events<T: Tweenable, V: Clone + Into<T>>(
@@ -871,5 +873,7 @@ pub async fn parse_rpe(source: &str, fs: &mut dyn FileSystem, extra: ChartExtra)
         );
     }
     process_lines(&mut lines);
-    Ok(Chart::new(rpe.meta.offset as f64 / 1000.0, lines, r, ChartSettings::default(), extra, hitsounds, fonts))
+    let mut chart = Chart::new(rpe.meta.offset as f64 / 1000.0, lines, r, ChartSettings::default(), extra, hitsounds, fonts);
+    chart.block_areas = block_areas_from_file(rpe.block_area_list);
+    Ok(chart)
 }
