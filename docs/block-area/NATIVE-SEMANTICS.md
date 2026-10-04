@@ -242,8 +242,55 @@ readyWin  = (enableTime - disabledBlockReadyDuration <= t) && (t < enableTime)
 | 项 | 官方 | Phira Pro | 我们的选择 |
 |---|---|---|---|
 | InOut 缓动 | `1-0.5(2-2u)^p` | 同 | 同 Pro（正确） |
-| `SafeDiv` 阈值 | `max(1e-6·|d|, 8ε)` | `2^-146` | **按官方** |
+| `SafeDiv` 阈值 | `max(1e-6·\|d\|, 8ε)` | `2^-146` | **按官方** |
 | 渐显时长 | `disabledBlockShowDuration`(0x58) | 0.5 常数 | 按 Pro 的 0.5，代码里注明来源字段 |
 | Ready 窗口 | `disabledBlockReadyDuration`(0x5C) | 0.5 常数 | 按 Pro 的 0.5，注明 |
 | 生命周期表现 | 切 layer | 用 opacity 渐变建模 Disabled | 按 Pro（视觉等价，待 oracle 差分） |
 | `Start()` 无 `blockInfo` 时 | 直接 return（不写 layer 名） | — | 无需处理 |
+
+---
+
+## 7. 实现状态与依赖缺口
+
+代码落脚点：
+
+| 模块 | 作用 |
+|---|---|
+| `phire/src/core/block.rs` | 结构 + 缓动表 + 变换链 + 触点奇偶判定（13 个单测） |
+| `phire/src/core/block_mask.rs` | mask / EdgeMask / GlowMask 的 CPU 等价 |
+| `phire/src/core/block_touch.rs` | touch 相机 CPU 源（hover） |
+| `phire/src/core/block_shader.rs` | 全屏材质 + 帧内缓存 + 两层级接入 |
+| `phire/src/core/shaders/block_full.{glsl,vert}` | 官方 GLSL（逐字符保留） |
+| `phire/src/parse/pgr.rs` | `blockAreaList` 反序列化 |
+| `phire/src/judge.rs` | 触点拦截 + `infected` finger ID |
+| `phire/src/core/chart.rs` / `scene/game.rs` | 渲染层级接线 |
+
+### 7.1 两处 API 缺口（本仓库的 macroquad/miniquad fork 与 Pro 的不同）
+
+1. **`glCopyTexSubImage2D`**：Pro 靠自己的 `vendor/prpr-miniquad` 补了这个符号，
+   本仓库 pin 的 `2278535805/miniquad` 原生端**没有导出**。
+   → 改用谱面 render target 的双缓冲（交换后从旧图采样、往新图写），
+   与 `core/effect.rs` 的后处理同一条路径，不需要额外的 framebuffer 拷贝。
+2. **`Texture2D::set_wrap`**：本仓库的 macroquad fork 没有它。
+   → 改用 miniquad 的 `RenderingBackend::texture_set_wrap`。
+
+### 7.2 array uniform 的坑（已被冒烟测试抓到）
+
+`_TouchPos` 是 `uniform vec2 _TouchPos[10]`。miniquad 把它当作**一个** array uniform：
+`glGetUniformLocation("_TouchPos")` + `glUniform2fv(loc, 10, data)`。
+按 `_TouchPos[i]` 逐个 `set_uniform` 会**全部落空**（只打 “non-existing uniform” 警告，
+不报错），hover 的触点坐标会一直是 0。必须用 `Material::set_uniform_array`。
+
+> 这类问题 `cargo check` 看不出来，所以有
+> `cargo run -p phire --example block_shader_smoke` —— 它在真实 GL 驱动上链接材质并
+> 走一遍绘制路径。
+
+### 7.3 尚未做
+
+* **音频低通**：官方在首次有触点被遮挡时给谱面音乐挂 1500 Hz 低通、0.1s 过渡到 22000 Hz。
+  Pro 为此改了自己的 sasa fork（二阶共振）。本仓库 pin 的 sasa 只有一阶
+  `set_low_pass` → 未实现。
+* **像素差分**：可以用 `phi-recorder.exe`（Phira Pro 的可运行实现）对同一谱面同一时刻出帧
+  做差分，定位 Pro 自己承认仍未解决的整帧色调差。
+* **iOS**：Metal 后端需要单独验证。
+
