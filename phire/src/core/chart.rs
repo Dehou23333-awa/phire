@@ -82,12 +82,14 @@ impl Chart {
     /// 所以要在 `GameScene` 画完 `ui()` 之后调，`onto` 传那时正在写的图。
     /// 详见 [`BlockAreaRenderer::render`]。
     pub fn render_block_area(&self, res: &mut Resource, onto: Option<RenderTarget>) {
-        if !res.config.render_block_area || self.block_areas.is_empty() {
-            return;
-        }
+        self.render_block_area_filtered(res, onto, None);
+    }
+
+    pub fn render_block_area_filtered(&self, res: &mut Resource, onto: Option<RenderTarget>, subtract: Option<bool>) {
+        if !res.config.render_block_area || self.block_areas.is_empty() { return; }
         let time = res.time;
-        let blocks = &self.block_areas;
-        self.block_area_renderer.borrow_mut().render(res, blocks, time, onto);
+        let blocks: Vec<_> = self.block_areas.iter().filter(|area| subtract.map_or(true, |value| area.is_subtract == value)).cloned().collect();
+        self.block_area_renderer.borrow_mut().render(res, &blocks, time, onto);
     }
 
     /// 修改剧情遮挡块的外观（颜色 / 故障效果 / 材质参数）。

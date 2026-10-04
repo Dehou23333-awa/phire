@@ -1525,26 +1525,27 @@ impl Scene for GameScene {
         }
         
         {
+            let block_onto = res.chart_target.as_ref().map(|it| it.output()).or(res.camera.render_target.clone());
+            set_camera(&Camera2D { zoom: chart_zoom, viewport: chart_viewport, rotation: angle.to_degrees(), render_target: block_onto.clone(), ..Default::default() });
+            self.chart.render_block_area_filtered(res, block_onto, Some(true));
+        }
+
+        {
             set_camera(&Camera2D {
                 zoom: if res.config.chart_ratio < 1. { vec2(asp2_ui_window * ratio, 1. * ratio) } else { vec2(asp2_ui * ratio, 1. * ratio) },
                 viewport: chart_viewport,
-                render_target: self.res.chart_target.as_ref().map(|it| it.output()).or(self.res.camera.render_target.clone()),
+                render_target: res.chart_target.as_ref().map(|it| it.output()).or(res.camera.render_target.clone()),
                 ..Default::default()
             });
+            drop(res);
             self.ui(ui, tm)?;
+        }
 
-            // 遮挡层压在整帧之上 —— 刚画完的 UI（分数 / 曲名 / 暂停键 / 难度）和
-            // 音符、判定线都要被它盖住，所以只能排在这里。相机换回图表空间，
-            // 目标就是 UI 刚写过的那张（MSAA 已在 `Chart::render` 里 resolve 过）。
-            let block_onto = self.res.chart_target.as_ref().map(|it| it.output()).or(self.res.camera.render_target.clone());
-            set_camera(&Camera2D {
-                zoom: chart_zoom,
-                viewport: chart_viewport,
-                rotation: angle.to_degrees(),
-                render_target: block_onto.clone(),
-                ..Default::default()
-            });
-            self.chart.render_block_area(&mut self.res, block_onto);
+        {
+            let res = &mut self.res;
+            let block_onto = res.chart_target.as_ref().map(|it| it.output()).or(res.camera.render_target.clone());
+            set_camera(&Camera2D { zoom: chart_zoom, viewport: chart_viewport, rotation: angle.to_degrees(), render_target: block_onto.clone(), ..Default::default() });
+            self.chart.render_block_area_filtered(res, block_onto, Some(false));
         }
 
         if !self.res.no_effect && !self.effects.is_empty() {
