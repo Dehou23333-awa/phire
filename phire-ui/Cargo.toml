@@ -57,7 +57,11 @@ logos = { workspace = true }
 ndk-sys = { workspace = true }
 ndk-context = { workspace = true }
 sasa = { workspace = true, default-features = false, features = ["oboe"] }
-openssl = { workspace = true }
+# reqwest's `native-tls` pulls in openssl-sys on every target. Desktop builds
+# link the system OpenSSL, but Android has none and the NDK does not ship one,
+# so build it from source for this target only (needs perl + make, both present
+# on CI). Upstream avoids this by leaving `native-tls` out entirely.
+openssl = { workspace = true, features = ["vendored"] }
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 sasa = { workspace = true, default-features = false, features = ["ohos"] }
