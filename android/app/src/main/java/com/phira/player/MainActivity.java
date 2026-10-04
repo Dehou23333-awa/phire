@@ -58,6 +58,9 @@ public final class MainActivity extends Activity {
         setFullScreen(true);
 
         // Hands over to miniquad, which calls quad_main() -> the game starts.
+        // initializeContext has to happen first: it sets up ndk_context and the
+        // Android certificate verifier, and activityOnCreate does not do it.
+        QuadNative.initializeContext(this);
         QuadNative.activityOnCreate(this);
     }
 
@@ -79,6 +82,7 @@ public final class MainActivity extends Activity {
     protected void onDestroy() {
         QuadNative.libActivityOnDestroy();
         QuadNative.activityOnDestroy();
+        QuadNative.releaseContext();
         super.onDestroy();
     }
 

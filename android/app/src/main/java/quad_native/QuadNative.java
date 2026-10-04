@@ -19,6 +19,11 @@ public final class QuadNative {
 
     // ---- miniquad ----
 
+    /** Must run before anything touches ndk_context / Android TLS. */
+    public static native void initializeContext(Object activity);
+
+    public static native void releaseContext();
+
     public static native void activityOnCreate(Object activity);
 
     public static native void activityOnResume();
