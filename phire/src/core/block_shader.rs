@@ -354,6 +354,13 @@ fn draw_layer(
 
     let mut gl = unsafe { get_internal_gl() };
 
+    // `macroquad` 的 `push_camera_state` / `pop_camera_state` **不保存 viewport**
+    // （只存 render_pass / depth_test / camera_matrix），而下面要装的遮罩相机用的是
+    // `viewport: None`。不自己存一份还原的话，这一趟之后**同一个 pass 里后面画的**
+    // 音符 / 打击特效就会拿到错的 viewport —— 实测会让 Disabled 层可见的那段时间
+    // （如 ハテ 40–62s）里所有音符特効的位置和缩放跑偏。
+    let saved_viewport = gl.quad_gl.get_viewport();
+
     // 官方的 ActiveBlock / DisabledBlock 是挂在相机上的**全屏后处理**：全屏 mesh 的
     // `in_TEXCOORD0` 就是整屏 UV `[0,1]²`，所有贴图 UV（`_DisplaceMap_ST` = 0.8/0.3、
     // `_SparkMap_ST` = 3.0/1.2、`_NoiseMap_ST` = 1.5/1.46、`_TouchDisplaceMap_ST` = 0.55/0.3，
@@ -431,6 +438,7 @@ fn draw_layer(
             });
         }
         pop_camera_state();
+        unsafe { get_internal_gl() }.quad_gl.viewport(Some(saved_viewport));
         return;
     }
     let materials = materials.unwrap();
@@ -551,6 +559,7 @@ fn draw_layer(
     });
 
     pop_camera_state();
+    unsafe { get_internal_gl() }.quad_gl.viewport(Some(saved_viewport));
 }
 
 const VERTEX: &str = include_str!("shaders/block_full_vert.glsl");
