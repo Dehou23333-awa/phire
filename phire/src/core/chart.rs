@@ -1,6 +1,6 @@
 crate::tl_file!("parser");
 
-use super::{draw_disabled_zones, draw_zones_with_touches, visible_zones, BlockArea, BpmList, Effect, JudgeLine, JudgeLineKind, Matrix, Resource, UIElement, Vector};
+use super::{block_clock, draw_disabled_zones, draw_zones_with_touches, visible_zones, BlockArea, BpmList, Effect, JudgeLine, JudgeLineKind, Matrix, Resource, UIElement, Vector};
 use crate::{core::Object, fs::FileSystem, judge::JudgeStatus, ui::{TextPainter, Ui}};
 use anyhow::{Context, Result};
 use macroquad::prelude::*;
@@ -154,7 +154,13 @@ impl Chart {
             // Active 层在 HUD 之后，见 `render_block_overlay`。
             if res.config.render_block_area {
                 let zones = visible_zones(&self.block_areas, res.time, res.aspect_ratio);
-                draw_disabled_zones(res, res.aspect_ratio, &zones);
+                // 和 `GameScene::render` 算 `chart_onto` 时同一套：MSAA 时谱面画在 `input()` 上。
+                let onto = res
+                    .chart_target
+                    .as_ref()
+                    .map(|it| if res.config.sample_count > 1 { it.input() } else { it.output() })
+                    .or(res.camera.render_target.clone());
+                draw_disabled_zones(res, &zones, res.aspect_ratio, block_clock(res.time, res.config.block_area_clock_offset), onto);
             }
 
             #[cfg(feature = "video")]
@@ -215,8 +221,9 @@ impl Chart {
         let flip_x = res.config.flip_x();
         // 与 `render()` 里那层同一套 y 翻转（`draw_disabled_zones` 直接落在那层里，
         // Active 层不在，所以这里自己包）。
+        let onto = res.chart_target.as_ref().map(|it| it.output()).or(res.camera.render_target.clone());
         res.apply_model_of(&Matrix::identity().append_nonuniform_scaling(&Vector::new(if flip_x { -1. } else { 1. }, -1.)), |res| {
-            draw_zones_with_touches(res, res.aspect_ratio, &zones, &self.blocked_touches, flip_x);
+            draw_zones_with_touches(res, &zones, res.aspect_ratio, &self.blocked_touches, flip_x, onto);
         });
     }
 }

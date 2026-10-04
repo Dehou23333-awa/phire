@@ -19,7 +19,9 @@ pub use block::{
 };
 
 mod block_shader;
-pub use block_shader::{block_material_ready, draw_disabled_zones, draw_zones_with_touches, prepare_block_effects, reset_block_effects, visible_zones};
+pub use block_shader::{
+    block_clock, block_material_ready, draw_disabled_zones, draw_zones_with_touches, prepare_block_effects, reset_block_effects, visible_zones,
+};
 
 mod chart;
 pub use chart::{Chart, ChartExtra, ChartSettings, HitSoundMap};

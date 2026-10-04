@@ -306,7 +306,52 @@ y **向下**为正（所以判定取触点时要 `-p.y`，绘制时统一乘一�
 > 的块，分别只开 Disabled 和只开 Active，对基线算四象限的 `ΔR`——
 > 正确结果应该只在 `BL` 明显非零，再拿左上象限反向确认一次。
 
-### 7.3 尚未做
+### 7.4 已修复：渲染基准确认与 y 翻转归属
+
+以下几条是后续逐项反汇编确认的，已写进实现（详见代码注释）：
+
+**a. 遮罩/效果 RT 的真实分辨率**（`BlockRender.Start()` 里 13 个 `CreateRenderTexture` 调用点）
+
+| RT | 尺寸 | 格式参数 | filter |
+|---|---|---|---|
+| `sceneColorRT` | `Screen / 3` | 0x10 | Point |
+| `normalBlockRT` / `subtractBlockRT` / `disabled*BlockRT` / `composed*RT` / `touchBlockRT` | `ceil(Screen / 8)` | 0x19 | Point |
+| **`effectRT`** | `ceil(Screen/8) * 2` = `Screen / 4` | 0x19 | **Bilinear** |
+| `pingA` / `pingB` | `Screen / 4` | 0x19 | Point |
+
+→ 之前按 **chart viewport** 算尺寸是错的（letterbox 时会变），现在改成**整个 render target**。
+
+**b. 贴图 UV 的基准是「整屏 UV」**
+
+官方 ActiveBlock 顶点着色器：`vs_TEXCOORD0 = in_TEXCOORD0`（全屏 mesh 的 UV），
+而 `_DisplaceMap_ST` 等是在它基础上缩放的。已对 APK 核过全部 ST（offset 均为 0）：
+
+| 参数 | scale |
+|---|---|
+| `_DisplaceMap_ST`（Active） | `(0.8, 0.3)` |
+| `_DisplaceMap_ST`（Disabled） | `(0.5, 0.2)` |
+| `_SparkMap_ST` | `(3.0, 1.2)` |
+| `_NoiseMap_ST` | `(1.5, 1.46)` |
+| `_TouchDisplaceMap_ST` | `(0.55, 0.3)` |
+
+同样地 `clipHalfWidth = _ScreenParams.y * 8/9 / _ScreenParams.x` 也是屏幕尺寸。
+→ 所以四边形必须覆盖**整个 render target**，否则 `chartRatio != 1` 时整层会跟着缩放。
+
+**c. 场景底图必须拷一份，不能靠双缓冲交换**
+
+官方把 ActiveBlock **叠在同一张 camera target** 上（读的是别处的拷贝），混合是 `One / OneMinusSrcAlpha`。
+曾经用 `MSRenderTarget::swap()` 代替拷贝：交换后新 buffer 里是**上一帧**的残影，
+半透明处会把旧帧漏出来 → 帧间发散（实测两次相同输入仍差 0.004）。
+现在用 `copy_fbo` 把当前 target 拷进自己的纹理当 `uScene`，**仍写回同一张 target**。
+
+**d. 噪域时钟**
+
+官方的 `_Time` 来自 `Time.time`（**启动游戏**算起的全局时钟），与歌曲位置无关，
+所以同一时刻的相位取决于「启动到进曲」的延迟，是个随机量。
+现在改成 `歌曲时间 + Config::block_area_clock_offset`（默认 0）：确定、seek 可重现，
+而且调偏移就能对齐任意一份官方录制（实测 offset 0 vs 3 最大像素差 0.95）。
+
+### 7.5 尚未做
 
 * **音频低通**：官方在首次有触点被遮挡时给谱面音乐挂 1500 Hz 低通、0.1s 过渡到 22000 Hz。
   Pro 为此改了自己的 sasa fork（二阶共振）。本仓库 pin 的 sasa 只有一阶

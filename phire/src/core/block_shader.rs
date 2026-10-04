@@ -18,8 +18,8 @@
 //! 材质常量直接来自官方 `.mat`，可用 `docs/block-area/audit_material_constants.py`
 //! 对 APK 重新核对（任何漂移都会立刻报出来）。
 
-use super::{Matrix, Resource, Vector, Zone};
-use macroquad::material::{gl_use_default_material, gl_use_material, load_material, Material, MaterialParams};
+use super::{BlockPhase, Matrix, Resource, Vector, Zone};
+use crate::core::{copy_fbo, internal_id};
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation, PipelineParams, RenderingBackend, TextureWrap, UniformDesc, UniformType};
 use macroquad::prelude::*;
 use once_cell::sync::Lazy;
@@ -101,6 +101,12 @@ struct FrameTextures {
     effect: Option<Texture2D>,
     aux: Option<Texture2D>,
     touch: touch::TouchMask,
+    /// Active 层要采样「本帧已经画完的底图」。官方是将 ActiveBlock 叠在同张 camera target 上
+    /// （读的是别处的拷贝），所以这里把底图拷到自己的纹理，再叠回**同一张** target。
+    ///
+    /// 不要用 `MSRenderTarget` 的双缓冲交换代替：交换后新 buffer 里是**上一帧**的残影，
+    /// 而 shader 是 `One / OneMinusSrcAlpha`，半透明处会把旧帧漏出来（帧间会发散）。
+    scene: Option<(RenderTarget, u32)>,
     /// Unity `_Time` 在同一帧的所有 pass 里是同一个值，这里缓存它。
     clock: Option<f32>,
 }
@@ -292,47 +298,112 @@ pub fn visible_zones(areas: &[super::BlockArea], time: f64, aspect: f32) -> Vec<
     areas.iter().filter_map(|area| Zone::from_area(area, time, aspect)).collect()
 }
 
+/// 噪域的**动画时钟**（秒）。
+///
+/// 官方把 `_Time` 用作位移与噪波的演化时间，而 Unity 的 `_Time` 来自 `Time.time`
+/// —— **应用程序启动起算的全局时钟**，与歌曲位置无关。所以官方自己同一时刻的噪域相位
+/// 也取决于「启动游戏到进曲」的延迟，是个随机量。
+///
+/// 这里改成**歌曲时间 + 可配置偏移**：确定性、seek 可重现；只要把偏移设成那个延迟，
+/// 就能精确复现官方任意一次录制的相位。
+#[inline]
+pub fn block_clock(song_time: f64, offset: f32) -> f32 {
+    song_time as f32 + offset
+}
+
 /// 画 Disabled / Ready 层。必须由 `Chart::render` 在判定线**之前**调用
 /// （官方 sorting layer order 2）。
-pub fn draw_disabled_zones(res: &mut Resource, aspect: f32, zones: &[Zone]) {
+pub fn draw_disabled_zones(res: &mut Resource, zones: &[Zone], aspect: f32, clock: f32, onto: Option<RenderTarget>) {
     // Unity 的 `_Time` 在一帧里所有 pass 共用一个值；即使这一层是空的也要记下时钟。
-    let time = get_time() as f32;
-    FRAME.with(|frame| frame.borrow_mut().clock = Some(time));
-    draw_layer(res, aspect, zones, time, true, &[]);
+    FRAME.with(|frame| frame.borrow_mut().clock = Some(clock));
+    draw_layer(res, zones, aspect, clock, true, onto, None);
 }
 
 /// 画 Active 层（含触点 hover）。必须由 `GameScene` 在 HUD / UI **之后**调用
 /// （官方 `CameraEvent.AfterForwardAlpha`）。
 ///
 /// `touches` 里的位置是 chart 空间；ID 用来保持原生槽位生命周期。
-pub fn draw_zones_with_touches(res: &mut Resource, aspect: f32, zones: &[Zone], touches: &[(u64, Vector)], flip_x: bool) {
-    // 官方 `_TouchPos` 是相机归一化屏幕坐标，所以要走一遍当前投影矩阵。
-    let projection = unsafe { get_internal_gl() }.quad_gl.get_projection_matrix();
-    let mut touches: Vec<_> = touches
-        .iter()
-        .map(|&(id, p)| {
-            let p = projection * vec4(if flip_x { -p.x } else { p.x }, -p.y, 0., 1.);
-            (id, vec2(p.x / p.w, p.y / p.w) * 0.5 + vec2(0.5, 0.5))
-        })
-        .collect();
-    // 判定那边的触点来自 HashMap，加一根手指/松一根手指时顺序会变，
-    // 这里按 ID 排序让 SDF 累加顺序稳定。
-    touches.sort_by_key(|(id, _)| *id);
-    let time = FRAME.with(|frame| frame.borrow().clock).unwrap_or_else(|| get_time() as f32);
-    draw_layer(res, aspect, zones, time, false, &touches);
+pub fn draw_zones_with_touches(res: &mut Resource, zones: &[Zone], aspect: f32, touches: &[(u64, Vector)], flip_x: bool, onto: Option<RenderTarget>) {
+    let clock = FRAME.with(|frame| frame.borrow().clock).unwrap_or(0.);
+    draw_layer(res, zones, aspect, clock, false, onto, Some((touches, flip_x)));
 }
 
-fn draw_layer(res: &mut Resource, aspect: f32, zones: &[Zone], time: f32, disabled: bool, touches: &[(u64, Vec2)]) {
+fn draw_layer(
+    res: &mut Resource,
+    zones: &[Zone],
+    aspect: f32,
+    time: f32,
+    disabled: bool,
+    onto: Option<RenderTarget>,
+    touch_source: Option<(&[(u64, Vector)], bool)>,
+) {
+    let needs_hover = touch_source.is_some_and(|(list, _)| !list.is_empty());
     let needed = if disabled {
         zones.iter().any(|z| !z.active && z.opacity > 0.)
     } else {
-        zones.iter().any(|z| z.active || z.ready) || !touches.is_empty() || FRAME.with(|frame| frame.borrow().touch.visible())
+        zones.iter().any(|z| z.active || z.ready) || needs_hover || FRAME.with(|frame| frame.borrow().touch.visible())
     };
     if !needed {
         return;
     }
 
-    let Some(materials) = MATERIAL.as_ref() else {
+    let mut gl = unsafe { get_internal_gl() };
+
+    // 官方的 ActiveBlock / DisabledBlock 是挂在相机上的**全屏后处理**：全屏 mesh 的
+    // `in_TEXCOORD0` 就是整屏 UV `[0,1]²`，所有贴图 UV（`_DisplaceMap_ST` = 0.8/0.3、
+    // `_SparkMap_ST` = 3.0/1.2、`_NoiseMap_ST` = 1.5/1.46、`_TouchDisplaceMap_ST` = 0.55/0.3，
+    // 均已对 APK 核过）都是在它基础上缩放的；`clipHalfWidth = _ScreenParams.y*8/9/_ScreenParams.x`
+    // 也是屏幕尺寸。
+    //
+    // 所以遮罩分辨率、UV 基准、`_ScreenParams` 全部必须用**整个 render target**，
+    // 而不是当前的 chart viewport —— 否则 letterbox 或 `chartRatio != 1` 时整层会跟着缩放。
+    let draw_onto = onto;
+    let (width, height) = match &draw_onto {
+        Some(target) => (target.texture.width().max(1.) as usize, target.texture.height().max(1.) as usize),
+        None => (screen_width().max(1.) as usize, screen_height().max(1.) as usize),
+    };
+
+    gl.flush();
+
+    // Active 层采样底图：把当前 render target 拷到自己的纹理，然后**仍写回同一张 target**
+    // （官方就是叠在同一张 camera target 上）。
+    let mut scene = None;
+    if !disabled {
+        let size = (width as u32, height as u32);
+        FRAME.with(|frame| {
+            let mut frame = frame.borrow_mut();
+            if frame.scene.as_ref().is_none_or(|(texture, _)| (texture.texture.width() as u32, texture.texture.height() as u32) != size) {
+                let target = render_target(size.0, size.1);
+                let fbo = internal_id(target.clone());
+                frame.scene = Some((target, fbo));
+            }
+            let (target, fbo) = frame.scene.as_ref().unwrap();
+            scene = Some(target.texture.clone());
+            let source = draw_onto.as_ref().map(|it| internal_id(it.clone())).unwrap_or(0);
+            copy_fbo(source, *fbo, size);
+        });
+    }
+    let scene = scene.unwrap_or_else(|| EMPTY_TEX.clone());
+
+    // 遮罩相机：覆盖**整个 render target**，与谱面相机解耦。
+    //
+    // `zoom.y` 用 `aspect`（= `res.aspect_ratio`，与 `Zone::from_area` / 判定同一套）：
+    // 因为四边形的 y 范围是按同一 aspect 写的，两者相等时才会刚好铺满目标高度，
+    // 同时也不会再被 `chartRatio` / viewport 缩放。
+    // （早先版本直接用谱面相机，`zoom.y = asp2_chart * chartRatio`，ratio ≠ 1 时整层会跟着放大。）
+    //
+    // `render_target` 必须与原相机一致 —— macroquad 的 `Camera2D::matrix()` 会根据
+    // `render_target.is_some()` 决定要不要翻转 y。
+    push_camera_state();
+    set_camera(&Camera2D {
+        zoom: vec2(1., aspect),
+        viewport: None,
+        render_target: draw_onto.clone(),
+        ..Default::default()
+    });
+
+    let materials = MATERIAL.as_ref();
+    if materials.is_none() {
         // shader 编译失败时的兜底：至少让人看出区域在哪。
         for z in zones.iter().filter(|z| !z.invert && z.active != disabled) {
             let m = Matrix::new_translation(&z.center)
@@ -342,31 +413,35 @@ fn draw_layer(res: &mut Resource, aspect: f32, zones: &[Zone], time: f32, disabl
                 draw_rectangle(-0.5, -0.5, 1., 1., Color::new(1., 0., 0., if z.active { 0.4 } else { 0.12 }));
             });
         }
+        pop_camera_state();
         return;
-    };
-
-    let mut gl = unsafe { get_internal_gl() };
-    let viewport = gl.quad_gl.get_viewport();
-    gl.flush();
-    let (width, height) = (viewport.2.max(1) as usize, viewport.3.max(1) as usize);
-
-    // Active 层采样底图。用谱面 render target 的双缓冲：交换后从旧图采样、往新图写，
-    // 与 `core/effect.rs` 的后处理同一条路子，不需要额外拷一次 framebuffer。
-    let mut scene = None;
-    if !disabled {
-        if let Some(target) = res.chart_target.as_mut() {
-            target.swap();
-            scene = Some(target.old().texture);
-            gl.quad_gl.render_pass(Some(target.output().render_pass.raw_miniquad_id()));
-        }
     }
-    let scene = scene.unwrap_or_else(|| EMPTY_TEX.clone());
+    let materials = materials.unwrap();
+
+    // 官方 `_TouchPos` 是相机归一化屏幕坐标，所以要走一遍**当前（遮罩）相机**的投影矩阵。
+    let touches: Vec<(u64, Vec2)> = match touch_source {
+        None => Vec::new(),
+        Some((list, flip_x)) => {
+            let projection = gl.quad_gl.get_projection_matrix();
+            let mut touches: Vec<_> = list
+                .iter()
+                .map(|&(id, p)| {
+                    let p = projection * vec4(if flip_x { -p.x } else { p.x }, -p.y, 0., 1.);
+                    (id, vec2(p.x / p.w, p.y / p.w) * 0.5 + vec2(0.5, 0.5))
+                })
+                .collect();
+            // 判定那边的触点来自 HashMap，加一根手指/松一根手指时顺序会变，
+            // 这里按 ID 排序让 SDF 累加顺序稳定。
+            touches.sort_by_key(|(id, _)| *id);
+            touches
+        }
+    };
 
     FRAME.with(|frame| {
         let mut frame = frame.borrow_mut();
         frame.masks.render_displaced(width, height, aspect, zones, time);
         if !disabled {
-            frame.touch.update_fingers(touches, time);
+            frame.touch.update_fingers(&touches, time);
         }
         let hover = !disabled && frame.touch.visible();
 
@@ -392,9 +467,7 @@ fn draw_layer(res: &mut Resource, aspect: f32, zones: &[Zone], time: f32, disabl
             let bh = frame.masks.height / 2;
             for y in 0..bh {
                 for x in 0..bw {
-                    let value = frame
-                        .touch
-                        .sample(vec2((x as f32 + 0.5) / bw as f32, (y as f32 + 0.5) / bh as f32), width as f32 / height as f32);
+                    let value = frame.touch.sample(vec2((x as f32 + 0.5) / bw as f32, (y as f32 + 0.5) / bh as f32), aspect);
                     for dy in 0..2 {
                         for dx in 0..2 {
                             let i = ((y * 2 + dy) * frame.masks.width + x * 2 + dx) * 4 + 3;
@@ -428,13 +501,16 @@ fn draw_layer(res: &mut Resource, aspect: f32, zones: &[Zone], time: f32, disabl
         m.set_texture("uDisplaceTex", DISPLACE_TEX.clone());
         m.set_texture("uSparkTex", SPARK_TEX.clone());
         m.set_texture("uMasks", frame.effect.clone().expect("effect texture"));
-        m.set_texture("uScene", scene);
+        m.set_texture("uScene", scene.clone());
         m.set_texture("uAuxMasks", frame.aux.clone().expect("aux texture"));
         m.set_texture("uNoiseTex", NOISE_TEX.clone());
         m.set_uniform("uUnityTime", vec4(time / 20., time, time * 2., time * 3.));
         m.set_uniform("uView", vec3(width as f32, height as f32, aspect));
         m.set_uniform("_ScreenParams", vec4(width as f32, height as f32, 1. + 1. / width as f32, 1. + 1. / height as f32));
-        m.set_uniform("_EffectRT_TexelSize", vec4(1. / effect_dim.0 as f32, 1. / effect_dim.1 as f32, effect_dim.0 as f32, effect_dim.1 as f32));
+        m.set_uniform(
+            "_EffectRT_TexelSize",
+            vec4(1. / effect_dim.0 as f32, 1. / effect_dim.1 as f32, effect_dim.0 as f32, effect_dim.1 as f32),
+        );
         if !disabled {
             m.set_uniform("_TouchPosCount", touches.len().min(MAX_TOUCHES) as i32);
         }
@@ -449,13 +525,15 @@ fn draw_layer(res: &mut Resource, aspect: f32, zones: &[Zone], time: f32, disabl
         m.set_uniform("_TouchPosShine", (0.63 + 0.37 * ((time * 43.).sin() * 0.5 + 0.5)) * 2.);
 
         gl_use_material(m);
-        // 全屏四边形。**翻转由调用方负责**，这里不能再加一层：
+        // 全屏四边形。**y 翻转由调用方负责**，这里不能再加一层：
         // Disabled 层是在 `Chart::render` 的 y 翻转里调的，Active 层由
-        // `Chart::render_block_overlay` 自己包一层；两边都保证恰好翻一次，
-        // 这样「模型空间 position → fieldUV」与「遮罩行序」才同向。
+        // `Chart::render_block_overlay` 自己包一层；两边都恰好翻一次，
+        // 这样「模型空间 position → fieldUV」才与遮罩行序同向。
         draw_rectangle(-1., -1. / aspect, 2., 2. / aspect, WHITE);
         gl_use_default_material();
     });
+
+    pop_camera_state();
 }
 
 const VERTEX: &str = include_str!("shaders/block_full_vert.glsl");
