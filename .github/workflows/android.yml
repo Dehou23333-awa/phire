@@ -40,10 +40,15 @@ jobs:
       # the preinstalled sdkmanager directly.
       - name: Set up Android NDK
         run: |
-          echo "ANDROID_HOME=${ANDROID_HOME:-${ANDROID_SDK_ROOT}}" >> "$GITHUB_ENV"
-          sdkmanager --install "ndk;26.1.10909125"
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/ndk/26.1.10909125" >> "$GITHUB_ENV"
-          ls "${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/ndk"
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          # sdkmanager is not on PATH by default on the runner.
+          SDKMANAGER=$(find "$SDK/cmdline-tools" -name sdkmanager -type f | head -1)
+          chmod +x "$SDKMANAGER"
+          "$SDKMANAGER" --install "ndk;26.1.10909125"
+          echo "ANDROID_NDK_HOME=$SDK/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          ls "$SDK/ndk"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
