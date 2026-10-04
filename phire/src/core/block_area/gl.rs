@@ -501,7 +501,7 @@ impl BlockGl {
             //     淡入中的 subtract 块会整块画不出来）；
             // G = 淡入淡出系数。官方 BlockCompose 的 disabled pass 正是 `sub.x * sub.y`，
             //     x 是 SubtractBlockBlender 的带通结果、y 是 alpha，两个量必须分开存。
-            let cnt = ((weight * 255.).round() as u8) as f32 / 255.;
+            let cnt = weight;
             let ga = (a * 255.).round() as u8;
             let color = Color::new(cnt, ga as f32 / 255., 0., 1.);
             // 归一化 → NDC。

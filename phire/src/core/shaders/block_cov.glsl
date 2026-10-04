@@ -82,9 +82,9 @@ void main() {
     vec3 subD = vec3(texture2D(u_subD, uvD).rg, 0.0);
     vec3 subR = vec3(texture2D(u_subR, uvD).rg, 0.0);
 
-    float a = abs(sub_band(subA.r) * subA.g - texture2D(u_maskA, uvA).r);
-    float d = abs(sub_band(subD.r) * subD.g - texture2D(u_maskD, uvD).r);
-    float r = abs(sub_band(subR.r) * subR.g - texture2D(u_maskR, uvD).r);
+    float a = abs(sub_band(subA.r) * subA.g - texture2D(u_maskA, uvA).g);
+    float d = abs(sub_band(subD.r) * subD.g - texture2D(u_maskD, uvD).g);
+    float r = abs(sub_band(subR.r) * subR.g - texture2D(u_maskR, uvD).g);
 
     gl_FragColor = vec4(clamp(a, 0.0, 1.0), clamp(d, 0.0, 1.0), clamp(r, 0.0, 1.0), 0.0);
 }
