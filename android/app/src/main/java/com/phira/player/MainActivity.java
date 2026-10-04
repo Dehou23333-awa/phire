@@ -9,7 +9,7 @@ import android.graphics.Insets;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
-import android.view.InputMethodManager;
+import android.view.inputmethod.InputMethodManager;
 import android.view.KeyEvent;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -23,7 +23,7 @@ import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.LinearLayout;
 
-import quad.native.QuadNative;
+import quad_native.QuadNative;
 
 /**
  * Activity shell for the native game.

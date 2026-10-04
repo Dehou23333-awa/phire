@@ -1,4 +1,4 @@
-package quad.native;
+package quad_native;
 
 import android.view.Surface;
 
