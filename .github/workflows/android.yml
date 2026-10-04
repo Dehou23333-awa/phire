@@ -19,7 +19,7 @@ jobs:
       # Tag of TeamFlos/prpr-avc-ffmpeg that provides the prebuilt ffmpeg
       # static libs for each target. phire's default `video` feature links
       # prpr-avc, which needs them.
-      AVC_TAG: 20260730_v0
+      AVC_TAG: 20260408_v0
     steps:
       - uses: actions/checkout@v4
 
@@ -88,6 +88,16 @@ jobs:
             tar -xzf "/tmp/${target}.tar.gz" -C "$dest"
             echo "== $dest"; ls -la "$dest"
           done
+          # Static libraries only fail at dlopen time, so a mismatched ffmpeg
+          # build produces a green CI and an app that dies on launch with
+          # UnsatisfiedLinkError. prpr-avc's FFI expects these symbols.
+          for sym in swr_alloc_set_opts swr_convert avcodec_open2 avformat_open_input; do
+            if ! nm -g --defined-only prpr-avc/static-lib/aarch64-linux-android/*.a 2>/dev/null | grep -qw "$sym"; then
+              echo "::error::$sym missing from the ffmpeg static libs (tag ${AVC_TAG})"
+              exit 1
+            fi
+          done
+          echo "ffmpeg symbol check passed" 
 
       - name: Build libphire_ui.so
         run: |
