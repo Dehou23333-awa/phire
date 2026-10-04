@@ -275,7 +275,6 @@ readyWin  = (enableTime - disabledBlockReadyDuration <= t) && (t < enableTime)
    → 改用 miniquad 的 `RenderingBackend::texture_set_wrap`。
 
 ### 7.2 array uniform 的坑（已被冒烟测试抓到）
-
 `_TouchPos` 是 `uniform vec2 _TouchPos[10]`。miniquad 把它当作**一个** array uniform：
 `glGetUniformLocation("_TouchPos")` + `glUniform2fv(loc, 10, data)`。
 按 `_TouchPos[i]` 逐个 `set_uniform` 会**全部落空**（只打 “non-existing uniform” 警告，
@@ -284,6 +283,28 @@ readyWin  = (enableTime - disabledBlockReadyDuration <= t) && (t < enableTime)
 > 这类问题 `cargo check` 看不出来，所以有
 > `cargo run -p phire --example block_shader_smoke` —— 它在真实 GL 驱动上链接材质并
 > 走一遍绘制路径。
+
+## 8. y 翻转的归属（改渲染时必看）
+
+遮罩的**行序**与 shader 里的 `fieldUV` 都是「chart y 向上为正」，而谱面内容是
+y **向下**为正（所以判定取触点时要 `-p.y`，绘制时统一乘一个 `scale(1,-1)`）。
+因为全屏四边形的 `fieldUV` 是从**模型空间**的 `position` 推出来的，所以：
+
+> 绘制遮罩时必须**恰好**包一层 `scale(flip_x ? -1 : 1, -1)`，多一层少一层都会上下颠倒。
+
+两层的归属不同，这是最容易写错的地方：
+
+| 层 | 调用位置 | 翻转从哪来 |
+|---|---|---|
+| Disabled / Ready | `Chart::render` 里，判定线之前 | **`Chart::render` 已经包了**，`draw_layer` 不能再加 |
+| Active | `Chart::render_block_overlay`，HUD 之后 | 那里不在 `render()` 的翻转里，**由 `render_block_overlay` 自己包** |
+
+> 踩过的坑：早期 `draw_layer` 无条件加了一层，Disabled 就变成**双重翻转**，
+> 整个 disabled 层上下颠倒（活动层反而是对的）。
+>
+> 排查手法：造一个只遮挡**左下象限**（`bottomLeft=(0,0)`、`topRight=(0.5,0.5)`）
+> 的块，分别只开 Disabled 和只开 Active，对基线算四象限的 `ΔR`——
+> 正确结果应该只在 `BL` 明显非零，再拿左上象限反向确认一次。
 
 ### 7.3 尚未做
 

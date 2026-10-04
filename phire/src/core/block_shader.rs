@@ -449,13 +449,11 @@ fn draw_layer(res: &mut Resource, aspect: f32, zones: &[Zone], time: f32, disabl
         m.set_uniform("_TouchPosShine", (0.63 + 0.37 * ((time * 43.).sin() * 0.5 + 0.5)) * 2.);
 
         gl_use_material(m);
-        // 全屏四边形。`fieldUV` 由顶点着色器从**模型空间** position 推出，
-        // 所以必须画在谱面那套 y 翻转的 model matrix 里 —— 这样 fieldUV 与遮罩同向，
-        // 而 sceneUV（由 gl_Position 推出）仍然对得上屏幕。
-        let flip = Matrix::identity().append_nonuniform_scaling(&Vector::new(if res.config.flip_x() { -1. } else { 1. }, -1.));
-        res.apply_model_of(&flip, |_| {
-            draw_rectangle(-1., -1. / aspect, 2., 2. / aspect, WHITE);
-        });
+        // 全屏四边形。**翻转由调用方负责**，这里不能再加一层：
+        // Disabled 层是在 `Chart::render` 的 y 翻转里调的，Active 层由
+        // `Chart::render_block_overlay` 自己包一层；两边都保证恰好翻一次，
+        // 这样「模型空间 position → fieldUV」与「遮罩行序」才同向。
+        draw_rectangle(-1., -1. / aspect, 2., 2. / aspect, WHITE);
         gl_use_default_material();
     });
 }

@@ -212,6 +212,11 @@ impl Chart {
         if zones.is_empty() {
             return;
         }
-        draw_zones_with_touches(res, res.aspect_ratio, &zones, &self.blocked_touches, res.config.flip_x());
+        let flip_x = res.config.flip_x();
+        // 与 `render()` 里那层同一套 y 翻转（`draw_disabled_zones` 直接落在那层里，
+        // Active 层不在，所以这里自己包）。
+        res.apply_model_of(&Matrix::identity().append_nonuniform_scaling(&Vector::new(if flip_x { -1. } else { 1. }, -1.)), |res| {
+            draw_zones_with_touches(res, res.aspect_ratio, &zones, &self.blocked_touches, flip_x);
+        });
     }
 }
