@@ -112,6 +112,10 @@ pub struct Config {
     pub preserve_framebuffer: bool,
     pub render_extra: bool,
     pub render_block_area: bool,
+    /// Draw the block areas as plain rectangles instead of the official distorted
+    /// material. `Config` has no struct-level `default`, so this needs its own.
+    #[serde(default)]
+    pub block_area_simple: bool,
     pub block_area_clock_offset: f32,
     pub bg_blurriness: f32,
 
@@ -209,6 +213,7 @@ impl Default for Config {
             preserve_framebuffer: false,
             render_extra: true,
             render_block_area: true,
+            block_area_simple: false,
             block_area_clock_offset: 0.,
             bg_blurriness: 80.,
 

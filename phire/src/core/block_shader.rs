@@ -1,5 +1,6 @@
 use super::{BlockPhase, Matrix, Resource, Vector, Zone};
 use crate::core::{internal_id, rescale_fbo, rgb8_render_target};
+use crate::ext::make_additive_pipeline;
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation, PipelineParams, RenderingBackend, TextureWrap, UniformDesc, UniformType};
 use macroquad::prelude::*;
 use once_cell::sync::Lazy;
@@ -74,6 +75,7 @@ struct FrameTextures {
     scene: Option<(RenderTarget, u32, (u32, u32))>,
     scene_warned: bool,
     clock: Option<f32>,
+    additive: Option<GlPipeline>,
 }
 
 thread_local! {
@@ -254,6 +256,60 @@ pub fn draw_zones_with_touches(res: &mut Resource, zones: &[Zone], aspect: f32, 
     draw_layer(res, zones, aspect, clock, false, onto, Some((touches, flip_x)));
 }
 
+/// The official material's two fills. The active one covers the chart, so it is a
+/// straight alpha-over; the disabled one only tints the background under the
+/// notes, so the material emits it with alpha 1 and lets `(One, One)` add it.
+const FILL: [f32; 3] = [0.7132075, 0.23549296, 0.23549296];
+const FILL_OPACITY: f32 = 0.667;
+const DISABLED_FILL: [f32; 3] = [0.497, 0.13766898, 0.13766898];
+const DISABLED_STRENGTH: f32 = 0.4;
+
+/// One rectangle per zone, in the chart camera the caller has already set.
+/// Subtract zones only mean something as a hole in the mask buffer, which a
+/// rectangle cannot express, so they are left undrawn.
+fn flat_rects(res: &mut Resource, zones: &[Zone], disabled: bool) {
+    if disabled {
+        let pipeline = FRAME.with(|frame| *frame.borrow_mut().additive.get_or_insert_with(make_additive_pipeline));
+        unsafe { get_internal_gl() }.quad_gl.pipeline(Some(pipeline));
+    }
+
+    for z in zones.iter().filter(|z| !z.invert && z.active != disabled) {
+        let color = if disabled {
+            Color::new(
+                DISABLED_FILL[0] * DISABLED_STRENGTH * z.opacity,
+                DISABLED_FILL[1] * DISABLED_STRENGTH * z.opacity,
+                DISABLED_FILL[2] * DISABLED_STRENGTH * z.opacity,
+                1.,
+            )
+        } else {
+            Color::new(FILL[0], FILL[1], FILL[2], FILL_OPACITY * z.opacity)
+        };
+        let m = Matrix::new_translation(&z.center)
+            * nalgebra::Rotation2::new(z.angle).to_homogeneous()
+            * Matrix::identity().append_nonuniform_scaling(&(z.half * 2.));
+        res.apply_model_of(&m, |_| draw_rectangle(-0.5, -0.5, 1., 1., color));
+    }
+
+    if disabled {
+        unsafe { get_internal_gl() }.quad_gl.pipeline(None);
+    }
+}
+
+/// The classic look: no mask buffer, no material, no scene blit.
+fn draw_flat(res: &mut Resource, zones: &[Zone], aspect: f32, disabled: bool, onto: Option<RenderTarget>) {
+    let saved_viewport = unsafe { get_internal_gl() }.quad_gl.get_viewport();
+    push_camera_state();
+    set_camera(&Camera2D {
+        zoom: vec2(1., aspect),
+        viewport: None,
+        render_target: onto,
+        ..Default::default()
+    });
+    flat_rects(res, zones, disabled);
+    pop_camera_state();
+    unsafe { get_internal_gl() }.quad_gl.viewport(Some(saved_viewport));
+}
+
 fn draw_layer(
     res: &mut Resource,
     zones: &[Zone],
@@ -270,6 +326,11 @@ fn draw_layer(
         zones.iter().any(|z| z.active || z.ready) || needs_hover || FRAME.with(|frame| frame.borrow().touch.visible())
     };
     if !needed {
+        return;
+    }
+
+    if res.config.block_area_simple {
+        draw_flat(res, zones, aspect, disabled, onto);
         return;
     }
 
@@ -322,14 +383,7 @@ fn draw_layer(
 
     let materials = MATERIAL.as_ref();
     if materials.is_none() {
-        for z in zones.iter().filter(|z| !z.invert && z.active != disabled) {
-            let m = Matrix::new_translation(&z.center)
-                * nalgebra::Rotation2::new(z.angle).to_homogeneous()
-                * Matrix::identity().append_nonuniform_scaling(&(z.half * 2.));
-            res.apply_model_of(&m, |_| {
-                draw_rectangle(-0.5, -0.5, 1., 1., Color::new(1., 0., 0., if z.active { 0.4 } else { 0.12 }));
-            });
-        }
+        flat_rects(res, zones, disabled);
         pop_camera_state();
         unsafe { get_internal_gl() }.quad_gl.viewport(Some(saved_viewport));
         return;
