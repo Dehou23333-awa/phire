@@ -265,15 +265,16 @@ const DISABLED_FILL: [f32; 3] = [0.497, 0.13766898, 0.13766898];
 const DISABLED_STRENGTH: f32 = 0.4;
 
 /// One rectangle per zone, in the chart camera the caller has already set.
-/// Subtract zones only mean something as a hole in the mask buffer, which a
-/// rectangle cannot express, so they are left undrawn.
+/// A subtract zone fills its own rectangle too: while it is not active the
+/// material does exactly that, and while it is active the material paints the
+/// inverse region, which a rectangle can only approximate by filling itself.
 fn flat_rects(res: &mut Resource, zones: &[Zone], disabled: bool) {
     if disabled {
         let pipeline = FRAME.with(|frame| *frame.borrow_mut().additive.get_or_insert_with(make_additive_pipeline));
         unsafe { get_internal_gl() }.quad_gl.pipeline(Some(pipeline));
     }
 
-    for z in zones.iter().filter(|z| !z.invert && z.active != disabled) {
+    for z in zones.iter().filter(|z| z.active != disabled) {
         let color = if disabled {
             Color::new(
                 DISABLED_FILL[0] * DISABLED_STRENGTH * z.opacity,
