@@ -101,6 +101,8 @@ mods-flip-x-sub = Flip on the X-axis
 mods-fade-out = Fade out
 mods-fade-out-sub = Notes disappear when they approach the line
 mods-full-screen-judge = Full screen judge
+mods-flat-block-area = Flat block area
+mods-flat-block-area-sub = Draw the story occlusion blocks as a flat mask instead of the official material; lighter on weak devices
 
 rate-failed = Rate failed
 rate-done = Rated successfully

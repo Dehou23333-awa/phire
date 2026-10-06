@@ -382,7 +382,7 @@ fn draw_layer(
 
     // The simple path and the missing-material fallback both skip the mask buffer,
     // the scene blit and the material entirely.
-    if res.config.block_area_simple || MATERIAL.as_ref().is_none() {
+    if res.config.block_area_simple || res.config.flat_block_area() || MATERIAL.as_ref().is_none() {
         draw_flat(zones, aspect, disabled, onto);
         return;
     }

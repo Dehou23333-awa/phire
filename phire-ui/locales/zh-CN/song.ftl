@@ -100,6 +100,8 @@ mods-flip-x-sub = 在 X 轴上反转谱面
 mods-fade-out = 下隐
 mods-fade-out-sub = 音符在靠近判定线时会隐藏
 mods-full-screen-judge = 全屏判定
+mods-flat-block-area = 极简遮挡
+mods-flat-block-area-sub = 剧情遮挡区用平铺遮罩绘制（不走官方材质），弱机型更流畅
 
 rate-failed = 评分失败
 rate-done = 评分成功

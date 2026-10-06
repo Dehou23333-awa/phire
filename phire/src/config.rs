@@ -13,6 +13,7 @@ bitflags! {
         const FLIP_X = 2;
         const FADE_OUT = 4;
         const FULL_SCREEN_JUDGE = 8;
+        const FLAT_BLOCK_AREA = 16;
     }
 }
 
@@ -260,6 +261,12 @@ impl Config {
     #[inline]
     pub fn flip_x(&self) -> bool {
         self.has_mod(Mods::FLIP_X)
+    }
+
+    /// 剧情遮挡区用平铺遮罩画（不走官方材质），弱机型/GLES2 上更稳。
+    #[inline]
+    pub fn flat_block_area(&self) -> bool {
+        self.has_mod(Mods::FLAT_BLOCK_AREA)
     }
 
     #[inline]

@@ -1259,6 +1259,7 @@ impl SongScene {
             item(tl!("mods-flip-x"), Some(tl!("mods-flip-x-sub")), Mods::FLIP_X);
             item(tl!("mods-fade-out"), Some(tl!("mods-fade-out-sub")), Mods::FADE_OUT);
             item(tl!("mods-full-screen-judge"), None, Mods::FULL_SCREEN_JUDGE);
+            item(tl!("mods-flat-block-area"), Some(tl!("mods-flat-block-area-sub")), Mods::FLAT_BLOCK_AREA);
             (width, h)
         });
     }
