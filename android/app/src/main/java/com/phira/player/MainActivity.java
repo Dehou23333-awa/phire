@@ -111,6 +111,20 @@ public final class MainActivity extends Activity {
     // ---------------------------------------------------------------------
 
     /**
+     * phire opens links through this (`phire/src/ext.rs` resolves `openUrl` with
+     * GetMethodID and calls it without a null check, so it must exist here).
+     */
+    public void openUrl(String url) {
+        runOnUiThread(() -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            } catch (Exception e) {
+                Log.w(TAG, "cannot open " + url, e);
+            }
+        });
+    }
+
+    /**
      * The native side wants a file (chart / respack import). The system picker
      * hands back a content:// URI, but Rust opens the result with plain
      * filesystem calls, so copy it into the cache dir and pass the real path.
@@ -326,6 +340,13 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean onKey(View v, int keyCode, KeyEvent event) {
+            // Volume keys are handed back to the framework. Returning true here
+            // marks them as handled and stops the system from adjusting the
+            // volume, and the native side cannot take over either: miniquad maps
+            // these keycodes to KeyCode::Unknown (it has no VolumeUp/Down at all).
+            if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE) {
+                return false;
+            }
             if (event.getAction() == KeyEvent.ACTION_DOWN && keyCode != 0) {
                 QuadNative.surfaceOnKeyDown(keyCode);
             }

@@ -37,6 +37,7 @@ The artifact `phira-android-apk` contains `phira-android-arm64-v8a.apk`.
 |---|---|---|
 | `chooseFile` | `()V` | document picker for chart / respack import |
 | `inputText` | `(Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;)V` | text prompt |
+| `openUrl` | `(Ljava/lang/String;)V` | external links (`phire/src/ext.rs`, not `scene.rs`) |
 | `antiAddiction` | `(Ljava/lang/String;Ljava/lang/String;)V` | only with the `aa` feature |
 
 Both of the first two are called from whichever thread the Rust code runs on,
@@ -44,6 +45,13 @@ so they must hop to the UI thread themselves.
 
 ## Notes
 
+* `QuadSurface.onKey` returns `false` for the volume keys on purpose. Android
+  delivers them to the focused view first, and miniquad's template consumes
+  everything, which overrides the framework's own volume handling (the keys then
+  do nothing at all: miniquad's `translate_keycode` has no entry for 24/25/164
+  and `KeyCode` has no `VolumeUp`/`VolumeDown`, so the native side cannot react
+  either). Letting them through is what makes the hardware keys work; see
+  winit#2748 and macroquad#714.
 * arm64-v8a only. NDK 27 no longer ships `libc++_shared.so` for armeabi-v7a,
   and `prpr-avc-ffmpeg` has never been built for `x86_64-linux-android`, so
   there is no emulator target.
