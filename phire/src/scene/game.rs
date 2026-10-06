@@ -375,7 +375,7 @@ impl GameScene {
             Self::load_chart(fs.deref_mut(), &info, &config).await?
         };
         let effects = std::mem::take(&mut chart.extra.global_effects);
-        if !chart.block_areas.is_empty() {
+        if !chart.block_areas.is_empty() && !config.block_area_simple {
             prepare_block_effects();
         }
         if config.fxaa {

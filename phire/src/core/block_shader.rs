@@ -1,5 +1,6 @@
-use super::{BlockPhase, Matrix, Resource, Vector, Zone};
+use super::{BlockPhase, Resource, Vector, Zone};
 use crate::core::{internal_id, rescale_fbo, rgb8_render_target};
+use crate::ext::make_additive_pipeline;
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation, PipelineParams, RenderingBackend, TextureWrap, UniformDesc, UniformType};
 use macroquad::prelude::*;
 use once_cell::sync::Lazy;
@@ -74,10 +75,41 @@ struct FrameTextures {
     scene: Option<(RenderTarget, u32, (u32, u32))>,
     scene_warned: bool,
     clock: Option<f32>,
+    additive: Option<GlPipeline>,
+    flat_active: FlatMask,
+    flat_disabled: FlatMask,
 }
 
 thread_local! {
     static FRAME: RefCell<FrameTextures> = RefCell::new(FrameTextures::default());
+}
+
+/// One `block_area_simple` layer: the low resolution coverage and the texture it is
+/// uploaded to. The upload only happens when the zones moved, never per frame.
+#[derive(Default)]
+struct FlatMask {
+    coverage: mask::FlatCoverage,
+    texture: Option<Texture2D>,
+}
+
+impl FlatMask {
+    fn texture(&mut self, dim: (usize, usize), aspect: f32, zones: &[Zone], active: bool) -> Texture2D {
+        if self.coverage.render(dim.0, dim.1, aspect, zones, active) {
+            let bytes = self.coverage.rgba();
+            let fits = self.texture.as_ref().is_some_and(|texture| (texture.width() as usize, texture.height() as usize) == dim);
+            if fits {
+                self.texture
+                    .clone()
+                    .expect("coverage texture 刚刚才检查过")
+                    .update_from_bytes(dim.0 as u32, dim.1 as u32, bytes);
+            } else {
+                let texture = Texture2D::from_rgba8(dim.0 as u16, dim.1 as u16, bytes);
+                texture.set_filter(FilterMode::Linear);
+                self.texture = Some(texture);
+            }
+        }
+        self.texture.clone().expect("coverage texture 刚刚才创建过")
+    }
 }
 
 fn official_texture(bytes: &[u8], wrap: TextureWrap) -> Texture2D {
@@ -254,6 +286,81 @@ pub fn draw_zones_with_touches(res: &mut Resource, zones: &[Zone], aspect: f32, 
     draw_layer(res, zones, aspect, clock, false, onto, Some((touches, flip_x)));
 }
 
+/// The official material's two fills. The active one covers the chart, so it is a
+/// straight alpha-over; the disabled one only tints the background under the
+/// notes, so the material emits it with alpha 1 and lets `(One, One)` add it.
+const FILL: [f32; 3] = [0.7132075, 0.23549296, 0.23549296];
+const FILL_OPACITY: f32 = 0.667;
+const DISABLED_FILL: [f32; 3] = [0.497, 0.13766898, 0.13766898];
+const DISABLED_STRENGTH: f32 = 0.4;
+
+/// How much smaller the `block_area_simple` coverage is than the target. Quarter
+/// resolution is what the material's own mask resolves to after its 2x upsample.
+const FLAT_DIVISOR: usize = 4;
+
+fn flat_dim(width: usize, height: usize) -> (usize, usize) {
+    ((width / FLAT_DIVISOR).max(1), (height / FLAT_DIVISOR).max(1))
+}
+
+fn flat_fill(disabled: bool) -> Color {
+    if disabled {
+        Color::new(
+            DISABLED_FILL[0] * DISABLED_STRENGTH,
+            DISABLED_FILL[1] * DISABLED_STRENGTH,
+            DISABLED_FILL[2] * DISABLED_STRENGTH,
+            1.,
+        )
+    } else {
+        Color::new(FILL[0], FILL[1], FILL[2], FILL_OPACITY)
+    }
+}
+
+/// The classic look: no mask buffer, no material, no scene blit. The zones go
+/// through `FlatCoverage` first, so overlapping zones merge instead of stacking up
+/// and subtract zones cancel the fill instead of drawing one more rectangle.
+fn draw_flat(zones: &[Zone], aspect: f32, disabled: bool, onto: Option<RenderTarget>) {
+    let (width, height) = match &onto {
+        Some(target) => (target.texture.width() as usize, target.texture.height() as usize),
+        None => (screen_width() as usize, screen_height() as usize),
+    };
+    let texture = FRAME.with(|frame| {
+        let mut frame = frame.borrow_mut();
+        if disabled {
+            frame.flat_disabled.texture(flat_dim(width, height), aspect, zones, false)
+        } else {
+            frame.flat_active.texture(flat_dim(width, height), aspect, zones, true)
+        }
+    });
+
+    let saved_viewport = unsafe { get_internal_gl() }.quad_gl.get_viewport();
+    push_camera_state();
+    set_camera(&Camera2D {
+        zoom: vec2(1., aspect),
+        viewport: None,
+        render_target: onto,
+        ..Default::default()
+    });
+    if disabled {
+        let pipeline = FRAME.with(|frame| *frame.borrow_mut().additive.get_or_insert_with(make_additive_pipeline));
+        unsafe { get_internal_gl() }.quad_gl.pipeline(Some(pipeline));
+    }
+    draw_texture_ex(
+        &texture,
+        -1.,
+        -1. / aspect,
+        flat_fill(disabled),
+        DrawTextureParams {
+            dest_size: Some(vec2(2., 2. / aspect)),
+            ..Default::default()
+        },
+    );
+    if disabled {
+        unsafe { get_internal_gl() }.quad_gl.pipeline(None);
+    }
+    pop_camera_state();
+    unsafe { get_internal_gl() }.quad_gl.viewport(Some(saved_viewport));
+}
+
 fn draw_layer(
     res: &mut Resource,
     zones: &[Zone],
@@ -270,6 +377,13 @@ fn draw_layer(
         zones.iter().any(|z| z.active || z.ready) || needs_hover || FRAME.with(|frame| frame.borrow().touch.visible())
     };
     if !needed {
+        return;
+    }
+
+    // The simple path and the missing-material fallback both skip the mask buffer,
+    // the scene blit and the material entirely.
+    if res.config.block_area_simple || MATERIAL.as_ref().is_none() {
+        draw_flat(zones, aspect, disabled, onto);
         return;
     }
 
@@ -320,21 +434,7 @@ fn draw_layer(
         ..Default::default()
     });
 
-    let materials = MATERIAL.as_ref();
-    if materials.is_none() {
-        for z in zones.iter().filter(|z| !z.invert && z.active != disabled) {
-            let m = Matrix::new_translation(&z.center)
-                * nalgebra::Rotation2::new(z.angle).to_homogeneous()
-                * Matrix::identity().append_nonuniform_scaling(&(z.half * 2.));
-            res.apply_model_of(&m, |_| {
-                draw_rectangle(-0.5, -0.5, 1., 1., Color::new(1., 0., 0., if z.active { 0.4 } else { 0.12 }));
-            });
-        }
-        pop_camera_state();
-        unsafe { get_internal_gl() }.quad_gl.viewport(Some(saved_viewport));
-        return;
-    }
-    let materials = materials.unwrap();
+    let materials = MATERIAL.as_ref().unwrap();
 
     let touches: Vec<(u64, Vec2)> = match touch_source {
         None => Vec::new(),

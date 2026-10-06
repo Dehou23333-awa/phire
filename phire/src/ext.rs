@@ -517,6 +517,31 @@ pub fn make_pipeline(write_color: bool, pass_op: StencilOp, test_func: CompareFu
     .unwrap()
 }
 
+/// macroquad's own passthrough shader with additive blending. Blending lives on
+/// the pipeline, so this is how a plain `draw_rectangle` gets the `(One, One)`
+/// the official block-area material is built with, without loading a material.
+pub fn make_additive_pipeline() -> GlPipeline {
+    let InternalGlContext {
+        quad_gl: gl,
+        quad_context: context,
+    } = unsafe { get_internal_gl() };
+    gl.make_pipeline(
+        context,
+        ShaderSource::Glsl {
+            vertex: shader::VERTEX,
+            fragment: shader::FRAGMENT,
+        },
+        PipelineParams {
+            color_blend: Some(BlendState::new(Equation::Add, BlendFactor::One, BlendFactor::One)),
+            primitive_type: PrimitiveType::Triangles,
+            ..Default::default()
+        },
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap()
+}
+
 #[inline]
 pub fn semi_black(alpha: f32) -> Color {
     Color { a: alpha, ..BLACK }

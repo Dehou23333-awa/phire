@@ -249,6 +249,60 @@ fn subtract_disabled(red: u8, green: u8) -> (f32, f32) {
     (unorm(r) as f32 / 255., unorm(g * r * 10.) as f32 / 255.)
 }
 
+/// `block_area_simple`'s mask: the same `|normal - subtract|` coverage the material
+/// reads out of `uMasks`, rasterised at low resolution but without the displacement,
+/// the ready layer and the hover channel.
+///
+/// Overlapping subtract zones keep cancelling here. The material's
+/// `subtract_enabled` only fires for a single accumulated `0.1` layer, so two of them
+/// on the same pixel cancel each other instead of the fill; the simple path unions
+/// them.
+#[derive(Default)]
+pub(super) struct FlatCoverage {
+    rgba: Vec<u8>,
+    width: usize,
+    height: usize,
+    active: bool,
+    zones: Vec<Zone>,
+}
+
+impl FlatCoverage {
+    /// Rebuilds the mask when the zones moved. Returns whether `rgba` changed.
+    /// The coverage only depends on the zones, so a steady frame costs nothing.
+    pub fn render(&mut self, width: usize, height: usize, aspect: f32, zones: &[Zone], active: bool) -> bool {
+        if self.width == width && self.height == height && self.active == active && self.zones == zones && self.rgba.len() == width * height * 4 {
+            return false;
+        }
+        self.width = width;
+        self.height = height;
+        self.active = active;
+        self.zones.clear();
+        self.zones.extend_from_slice(zones);
+        let mut normal = vec![0_u8; width * height];
+        let mut subtract = vec![0_u8; width * height];
+        for z in zones.iter().filter(|z| z.active == active) {
+            let layer = if z.invert { &mut subtract } else { &mut normal };
+            raster_rows(width, height, aspect, z, |y, first, last| {
+                for x in first..last {
+                    let i = y * width + x;
+                    layer[i] = unorm(layer[i] as f32 / 255. + z.opacity);
+                }
+            });
+        }
+        self.rgba.clear();
+        self.rgba.reserve(width * height * 4);
+        for i in 0..width * height {
+            let value = normal[i].abs_diff(subtract[i]);
+            self.rgba.extend_from_slice(&[value; 4]);
+        }
+        true
+    }
+
+    pub fn rgba(&self) -> &[u8] {
+        &self.rgba
+    }
+}
+
 #[allow(dead_code)]
 pub(super) fn compose_uv(uv: [f32; 2], time: f32) -> [f32; 2] {
     let d = medium(0.5 * medium((0.5_f32).sqrt().recip()));
@@ -447,5 +501,47 @@ mod tests {
         assert_eq!(masks.rgba, previous);
         masks.render_displaced(520, 560, 1., &zones, 1.);
         assert_eq!((masks.width, masks.height), (130, 140));
+    }
+
+    #[test]
+    fn flat_coverage_merges_overlaps_and_cancels_subtracts() {
+        let (width, height, aspect) = (64, 64, 1.);
+        let mut coverage = FlatCoverage::default();
+        let at = |coverage: &FlatCoverage, x: usize, y: usize| coverage.rgba()[(y * width + x) * 4];
+        let block = |x: f32, y: f32, half: f32, invert: bool| zone(x, y, half, half, 0., invert);
+
+        // Overlapping zones saturate into one coverage instead of stacking up, and
+        // a second identical call is free.
+        let pair = [block(-0.1, 0., 0.4, false), block(0.1, 0., 0.4, false)];
+        assert!(coverage.render(width, height, aspect, &pair, true));
+        assert_eq!(at(&coverage, 32, 32), 255);
+        assert!(!coverage.render(width, height, aspect, &pair, true));
+
+        // A subtract zone cancels the fill where they overlap, and leaves it alone
+        // where they do not.
+        let covered = [block(0., 0., 0.5, false), block(0., 0., 0.25, true)];
+        assert!(coverage.render(width, height, aspect, &covered, true));
+        assert_eq!(at(&coverage, 32, 32), 0);
+        assert_eq!(at(&coverage, 44, 32), 255);
+
+        // Overlapping subtract zones keep cancelling: the material's band only fires
+        // for a single accumulated 0.1 layer, so it would leave the fill intact here.
+        let doubled = [block(0., 0., 0.5, false), block(0., 0., 0.3, true), block(0., 0., 0.2, true)];
+        assert!(coverage.render(width, height, aspect, &doubled, true));
+        assert_eq!(at(&coverage, 32, 32), 0);
+
+        // A subtract zone with nothing under it paints its own rectangle, which is
+        // what `Mask` and the material's `abs_diff` do too.
+        assert!(coverage.render(width, height, aspect, &[block(-0.5, 0.5, 0.3, true)], true));
+        assert_eq!(at(&coverage, 16, 48), 255);
+        assert_eq!(at(&coverage, 48, 16), 0);
+
+        // The fade of a zone reaches the mask, and the layer follows `active`.
+        let mut faded = block(0., 0., 0.5, false);
+        faded.opacity = 0.5;
+        assert!(coverage.render(width, height, aspect, std::slice::from_ref(&faded), true));
+        assert_eq!(at(&coverage, 32, 32), 128);
+        assert!(coverage.render(width, height, aspect, std::slice::from_ref(&faded), false));
+        assert_eq!(at(&coverage, 32, 32), 0);
     }
 }
